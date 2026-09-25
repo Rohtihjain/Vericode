@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VeriCode 0.1 alpha — Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.39.0/min/vs/loader.min.js?v=2"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['"IBM Plex Sans"', 'system-ui', 'sans-serif'],
+                        mono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        :root {
+            --bg: #08060f;
+            --panel: #100e1c;
+            --panel-2: #161326;
+            --line: rgba(255,255,255,0.08);
+            --violet: #a78bfa;
+            --pink: #e879f9;
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            background:
+                radial-gradient(1200px 500px at 10% -10%, rgba(124, 58, 237, 0.18), transparent 50%),
+                radial-gradient(900px 400px at 100% 0%, rgba(192, 38, 211, 0.10), transparent 45%),
+                var(--bg);
+            color: #d4d4d8;
+            font-family: "IBM Plex Sans", system-ui, sans-serif;
+        }
+        body::before {
+            content: "";
+            pointer-events: none;
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+            background-size: 28px 28px;
+            mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
+        }
+        .mark {
+            box-shadow: 0 0 24px rgba(167, 139, 250, 0.35);
+        }
+        .panel {
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 18%), var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+        }
+        .btn-run {
+            background: linear-gradient(135deg, #7c3aed 0%, #9333ea 50%, #c026d3 100%);
+            box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 8px 24px rgba(124, 58, 237, 0.4);
+        }
+        .btn-run:hover { filter: brightness(1.08); }
+        .btn-run:disabled { opacity: 0.6; cursor: wait; }
+        .btn-ghost {
+            background: #1a172e;
+            border: 1px solid var(--line);
+        }
+        .btn-ghost:hover { background: #24203e; }
+        select.custom-select {
+            background: #1a172e;
+            border: 1px solid var(--line);
+            color: #e4e4e7;
+        }
+        select.custom-select:focus { outline: 1px solid rgba(167, 139, 250, 0.5); }
+        .gutter {
+            cursor: col-resize;
+            width: 8px;
+            flex: 0 0 8px;
+            position: relative;
+        }
+        .gutter::after {
+            content: "";
+            position: absolute;
+            top: 18%;
+            bottom: 18%;
+            left: 3px;
+            width: 2px;
+            border-radius: 2px;
+            background: rgba(167, 139, 250, 0.25);
+        }
+        .gutter:hover::after, .gutter.dragging::after {
+            background: rgba(167, 139, 250, 0.7);
+            box-shadow: 0 0 10px rgba(167, 139, 250, 0.6);
+        }
+        .tab {
+            color: #71717a;
+            border-bottom: 2px solid transparent;
+        }
+        .tab[aria-selected="true"] {
+            color: #f4f4f5;
+            border-bottom-color: #a78bfa;
+        }
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 99px;
+            background: #71717a;
+            box-shadow: 0 0 0 3px rgba(113, 113, 122, 0.2);
+        }
+        .status-dot.ok { background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18); }
+        .status-dot.err { background: #fb7185; box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.18); }
+        .status-dot.run { background: #38bdf8; box-shadow: 0 0 10px rgba(56, 189, 248, 0.6); }
+        #workspace { display: flex; min-height: 0; }
+        @media (max-width: 860px) {
+            #workspace { flex-direction: column; }
+            .gutter { display: none; }
+            #editorPane, #sidePane { width: 100% !important; flex: 1 1 50% !important; min-height: 220px; }
+        }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 8px; }
+        .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+        .error-row { cursor: pointer; }
+        .error-row:hover { background: rgba(251, 113, 133, 0.08); }
+        .lane {
+            height: 10px;
+            border-radius: 99px;
+            background: rgba(255,255,255,0.06);
+            overflow: hidden;
+        }
+        .lane > span {
+            display: block;
+            height: 100%;
+            width: 38%;
+            border-radius: 99px;
+            background: linear-gradient(90deg, #7c3aed, #e879f9);
+            box-shadow: 0 0 12px rgba(167, 139, 250, 0.6);
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden relative">
+
+    <header class="shrink-0 h-16 px-5 flex items-center justify-between gap-4 z-10 border-b border-white/[0.06] bg-[#0c0a16]/80 backdrop-blur-md">
+        <div class="flex items-center gap-3 min-w-0">
+            <div class="mark w-9 h-9 rounded-xl bg-gradient-to-tr from-violet-600 to-fuchsia-500 p-[1.5px] shrink-0">
+                <div class="w-full h-full rounded-[10px] bg-[#0b0914] flex items-center justify-center font-sans font-bold text-violet-200 text-sm">V</div>
+            </div>
+            <div class="min-w-0">
+                <div class="flex items-baseline gap-2">
+                    <h1 class="text-[15px] font-semibold tracking-wide text-white truncate">VeriCode</h1>
+                    <span class="text-[11px] uppercase tracking-[0.16em] text-violet-300/80">Studio</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2 shrink-0">
+            <label class="sr-only" for="presetSelect">Examples</label>
+            <select id="presetSelect" class="custom-select mono text-xs rounded-lg px-3 py-2 max-w-[220px]">
+                <option value="hello">Hello</option>
+                <option value="control">Control Flow</option>
+                <option value="functions">Functions</option>
+                <option value="collections">Collections</option>
+                <option value="functional">Functional</option>
+                <option value="types">Floats &amp; Null</option>
+                <option value="kitchen">Kitchen Sink</option>
+            </select>
+
+            <button type="button" onclick="document.getElementById('fileInput').click()" class="btn-ghost hidden sm:inline-flex items-center gap-1.5 text-zinc-200 text-xs font-medium px-3 py-2 rounded-lg" title="Open .veri file">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 19a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5z"/></svg>
+                Open
+            </button>
+            <button type="button" onclick="exportCode()" class="btn-ghost hidden sm:inline-flex items-center gap-1.5 text-zinc-200 text-xs font-medium px-3 py-2 rounded-lg" title="Save / Export — uses the filename above (click to rename)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M5 21h14"/></svg>
+                Save
+            </button>
+            <input type="file" id="fileInput" class="hidden" onchange="openFile(event)" accept=".veri,.txt">
+
+            <button id="runBtn" type="button" onclick="runCode()" class="btn-run inline-flex items-center gap-2 text-white font-medium text-xs px-4 py-2 rounded-lg">
+                <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                <span id="runLabel">Run</span>
+            </button>
+        </div>
+    </header>
+
+    <main id="workspace" class="flex-1 min-h-0 p-3 gap-0">
+        <section id="editorPane" class="panel flex flex-col overflow-hidden" style="flex: 1.35 1 0; min-width: 280px;">
+            <div class="px-4 py-2.5 border-b border-white/[0.06] flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="w-2 h-2 rounded-full bg-violet-400 shadow-[0_0_8px_rgba(167,139,250,0.8)]"></span>
+                    <input id="fileLabel" type="text" value="untitled.veri" spellcheck="false"
+                        class="mono text-[12px] text-zinc-200 bg-transparent border border-transparent rounded px-1.5 py-0.5 min-w-0 max-w-[220px] truncate focus:outline-none focus:border-violet-500/50 focus:bg-white/[0.04] hover:border-white/10"
+                        title="Click to rename — this name is used when you Export / Ctrl+S"
+                        onchange="onFileLabelChange(this)"
+                        onkeydown="if(event.key==='Enter'){this.blur(); event.preventDefault();}"
+                        onfocus="this.select()"
+                    />
+                </div>
+                <span class="mono text-[11px] text-zinc-500 hidden md:inline select-none">Ctrl+S <span class="text-zinc-700">save</span> · Ctrl+Enter <span class="text-zinc-700">run</span></span>
+            </div>
+            <p id="exampleHint" class="px-4 py-2 text-[12px] text-zinc-400 border-b border-white/[0.04] bg-white/[0.015]">First print. Change the filename above, then run (Ctrl+Enter).</p>
+            <div id="monacoEditor" class="flex-1 w-full min-h-0"></div>
+        </section>
+
+        <div id="gutter" class="gutter hidden md:block" title="Drag to resize"></div>
+
+        <section id="sidePane" class="panel flex flex-col overflow-hidden" style="flex: 1 1 0; min-width: 260px;">
+            <div class="px-3 pt-2 border-b border-white/[0.06] flex items-center gap-1">
+                <button type="button" class="tab mono text-[11px] px-3 py-2" data-tab="output" aria-selected="true">Output</button>
+                <button type="button" class="tab mono text-[11px] px-3 py-2" data-tab="problems" aria-selected="false">Problems <span id="problemCount" class="text-zinc-600">0</span></button>
+                <button type="button" class="tab mono text-[11px] px-3 py-2" data-tab="activity" aria-selected="false">Activity</button>
+                <div class="ml-auto flex items-center gap-2 pr-1 pb-1">
+                    <span id="execTime" class="mono text-[11px] text-cyan-400/90"></span>
+                    <button type="button" onclick="clearConsole()" class="text-[11px] mono text-zinc-500 hover:text-zinc-300 px-2 py-1">Clear</button>
+                </div>
+            </div>
+
+            <div id="panel-output" class="tab-panel flex-1 overflow-y-auto p-4 mono text-[12px] leading-relaxed text-cyan-200/90">
+                <div class="h-full flex flex-col items-center justify-center text-center text-zinc-500 py-10">
+                    <p class="text-zinc-400 text-sm font-medium">No output yet</p>
+                    <p class="text-[12px] mt-1 max-w-[220px]">Run a program. Prints land here — the warehouse floor.</p>
+                </div>
+            </div>
+            <div id="panel-problems" class="tab-panel hidden flex-1 overflow-y-auto p-3">
+                <div class="h-full flex flex-col items-center justify-center text-center text-zinc-500 py-10">
+                    <p class="text-zinc-400 text-sm font-medium">No problems</p>
+                    <p class="text-[12px] mt-1">The compiler will list anything it refuses here.</p>
+                </div>
+            </div>
+            <div id="panel-activity" class="tab-panel hidden flex-1 overflow-y-auto p-5">
+                <p class="text-[11px] uppercase tracking-[0.14em] text-zinc-500 mb-3">Session</p>
+                <div class="grid grid-cols-3 gap-2 mb-4">
+                    <div class="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 text-center">
+                        <div id="actRuns" class="mono text-lg text-zinc-100">0</div>
+                        <div class="text-[10px] uppercase tracking-wider text-zinc-500 mt-1">Runs</div>
+                    </div>
+                    <div class="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 text-center">
+                        <div id="actOk" class="mono text-lg text-emerald-400">0</div>
+                        <div class="text-[10px] uppercase tracking-wider text-zinc-500 mt-1">OK</div>
+                    </div>
+                    <div class="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 text-center">
+                        <div id="actErr" class="mono text-lg text-rose-400">0</div>
+                        <div class="text-[10px] uppercase tracking-wider text-zinc-500 mt-1">Errors</div>
+                    </div>
+                </div>
+                <p class="text-[11px] uppercase tracking-[0.14em] text-zinc-500 mb-2">Recent</p>
+                <div id="actLog" class="space-y-2">
+                    <p class="text-[12px] text-zinc-500 italic">No runs yet. Hit Run to start a session log.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="shrink-0 h-9 px-4 border-t border-white/[0.06] bg-[#0c0a16]/90 flex items-center justify-between gap-3 z-10">
+        <div class="flex items-center gap-2 min-w-0">
+            <span id="statusDot" class="status-dot"></span>
+            <span id="statusText" class="text-[12px] text-zinc-400">Ready</span>
+            <span class="text-zinc-700">·</span>
+            <span id="runtimeMeta" class="mono text-[11px] text-zinc-500 truncate">1 task · sequential · pipes 0</span>
+        </div>
+        <span class="mono text-[11px] text-zinc-600 hidden sm:inline">.veri</span>
+    </footer>
+
+    <script>
+        let editor;
+        let currentFile = 'untitled.veri';
+        let lastProblems = [];
+        let activityStats = { runs: 0, ok: 0, err: 0 };
+        let activityLog = []; // { t, ok, ms, preview }
+
+        const presets = {
+            hello: {
+                hint: 'First print. Change the filename above, then run (Ctrl+Enter).',
+                code: [
+                    '// Hello, VeriCode',
+                    'let name = "World";',
+                    'print "Hello, " + name;',
+                ].join('\n')
+            },
+            control: {
+                hint: 'if / else-if, while, counted loops, for-in, break & continue.',
+                code: [
+                    '// --- if / else-if ---',
+                    'let score = 85;',
+                    'if score >= 90 {',
+                    '    print "Grade: A";',
+                    '} else if score >= 70 {',
+                    '    print "Grade: B";',
+                    '} else {',
+                    '    print "Grade: C";',
+                    '}',
+                    '',
+                    'let label = if score >= 70 { "pass" } else { "fail" };',
+                    'print label;',
+                    '',
+                    '// --- while ---',
+                    'let i = 1;',
+                    'loop while i <= 5 {',
+                    '    print "Counting: " + str(i);',
+                    '    i += 1;',
+                    '}',
+                    '',
+                    '// --- counted loop ---',
+                    'loop 3 times {',
+                    '    print "Repeat!";',
+                    '}',
+                    '',
+                    '// --- for-in + break / continue ---',
+                    'loop n in range(1, 8) {',
+                    '    if n == 3 { continue; }',
+                    '    if n == 6 { break; }',
+                    '    print n;',
+                    '}',
+                ].join('\n')
+            },
+            functions: {
+                hint: 'First-class functions, recursion, and closures.',
+                code: [
+                    'let add = func(a, b) { return a + b; };',
+                    'print add(3, 4);',
+                    '',
+                    '// recursion',
+                    'let fact = func(n) {',
+                    '    if n <= 1 { return 1; }',
+                    '    return n * fact(n - 1);',
+                    '};',
+                    'print "5! = " + str(fact(5));',
+                    '',
+                    '// closure',
+                    'let makeCounter = func() {',
+                    '    let c = 0;',
+                    '    return func() {',
+                    '        c += 1;',
+                    '        return c;',
+                    '    };',
+                    '};',
+                    'let next = makeCounter();',
+                    'print next();',
+                    'print next();',
+                    'print next();',
+                ].join('\n')
+            },
+            collections: {
+                hint: 'Arrays, hashes, index read/write, and compound assignment.',
+                code: [
+                    'let nums = [10, 20, 30];',
+                    'print nums[0];',
+                    'nums[1] = 99;',
+                    'print nums;',
+                    'print push(nums, 40);',
+                    'print first(nums);',
+                    'print last(nums);',
+                    '',
+                    'let person = {"name": "Ada", "year": 1815};',
+                    'print person["name"];',
+                    'person["year"] = 1816;',
+                    'print keys(person);',
+                    'print values(person);',
+                    'print has(person, "name");',
+                    '',
+                    'let total = 0;',
+                    'loop x in nums {',
+                    '    total += x;',
+                    '}',
+                    'print "total = " + str(total);',
+                ].join('\n')
+            },
+            functional: {
+                hint: 'Pipe operator, range, map, filter, and reduce.',
+                code: [
+                    'print 5 |> func(x) { return x * x; } |> func(x) { return x + 1; };',
+                    'print "vericode" |> upper;',
+                    '',
+                    'let nums = range(1, 11);',
+                    'print nums;',
+                    '',
+                    'let doubled = map(nums, func(n) { return n * 2; });',
+                    'print doubled;',
+                    '',
+                    'let big = filter(doubled, func(n) { return n > 10; });',
+                    'print big;',
+                    '',
+                    'let sum = reduce(nums, func(a, b) { return a + b; }, 0);',
+                    'print "sum = " + str(sum);',
+                ].join('\n')
+            },
+            types: {
+                hint: 'Floats, null, interpolation, format, and math/string helpers.',
+                code: [
+                    'let pi = 3.14159;',
+                    'let r = 2.5;',
+                    'print "area = ${pi * r * r}";',
+                    'print type(pi);',
+                    '',
+                    'let name = "Ada";',
+                    'print "Hello, ${name}!";',
+                    'print format("score = {}", 95);',
+                    '',
+                    'let x = null;',
+                    'print type(x);',
+                    'print x == null;',
+                    '',
+                    'print abs(-7);',
+                    'print max(1, 5, 3);',
+                    'print sqrt(9.0);',
+                    'print pow(2, 10);',
+                    '',
+                    'print split("a,b,c", ",");',
+                    'print join(["x", "y"], "-");',
+                    'print trim("  hi  ");',
+                    'print contains("vericode", "code");',
+                    'print replace("hello", "l", "L");',
+                ].join('\n')
+            },
+            kitchen: {
+                hint: 'Almost every feature in one short program.',
+                code: [
+                    '// VeriCode kitchen sink',
+                    'let name = "Ada";',
+                    'print "Hello, " + name;',
+                    '',
+                    'let score = 85;',
+                    'print if score >= 70 { "pass" } else { "fail" };',
+                    '',
+                    'let i = 0;',
+                    'loop while i < 3 {',
+                    '    print i;',
+                    '    i += 1;',
+                    '}',
+                    '',
+                    'loop v in [7, 8, 9] {',
+                    '    if v == 8 { continue; }',
+                    '    print v;',
+                    '}',
+                    '',
+                    'let fact = func(n) {',
+                    '    if n <= 1 { return 1; }',
+                    '    return n * fact(n - 1);',
+                    '};',
+                    'print fact(5);',
+                    '',
+                    'let arr = [1, 2, 3];',
+                    'arr[1] = 99;',
+                    'print arr;',
+                    '',
+                    'let h = {"a": 1};',
+                    'h["b"] = 2;',
+                    'print h;',
+                    '',
+                    'print 5 |> func(n) { return n * n; }',
+                    'print map(range(1, 4), func(n) { return n * 10; });',
+                    '',
+                    'let pi = 3.14;',
+                    'print pi * 2.0;',
+                    'print 1e3;',
+                    'print [1,2,3,4][1:3];',
+                    'func add(a, b) { return a + b; }',
+                    'print add(2, 3);',
+                    'print null;',
+                    '',
+                    'print "kitchen sink done";',
+                ].join('\n')
+            },
+        };
+
+        function normalizeFileName(name) {
+            name = (name || '').trim() || 'untitled.veri';
+            // strip path bits if any
+            name = name.replace(/^.*[\\/]/, '');
+            if (!name.toLowerCase().endsWith('.veri') && !name.toLowerCase().endsWith('.txt')) {
+                name += '.veri';
+            }
+            // sanitize illegal filename chars
+            name = name.replace(/[<>:"|?*\x00-\x1f]/g, '_');
+            return name;
+        }
+
+        function setFileLabel(name) {
+            currentFile = normalizeFileName(name);
+            const el = document.getElementById('fileLabel');
+            if (el) el.value = currentFile;
+        }
+
+        function onFileLabelChange(el) {
+            setFileLabel(el.value);
+            el.value = currentFile; // show normalized form
+        }
+
+        function showTab(id) {
+            document.querySelectorAll('.tab').forEach(t => {
+                t.setAttribute('aria-selected', t.dataset.tab === id ? 'true' : 'false');
+            });
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+            document.getElementById('panel-' + id).classList.remove('hidden');
+            document.getElementById('panel-' + id).classList.add('flex');
+        }
+
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => showTab(tab.dataset.tab));
+        });
+
+        require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.39.0/min/vs' } });
+        require(['vs/editor/editor.main'], function () {
+            monaco.languages.register({ id: 'vericode' });
+            monaco.languages.setMonarchTokensProvider('vericode', {
+                keywords: [
+                    'let', 'print', 'if', 'else', 'func', 'return',
+                    'loop', 'while', 'times', 'in', 'ask', 'break', 'continue'
+                ],
+                typeKeywords: ['true', 'false', 'null'],
+                builtins: [
+                    'len', 'push', 'pop', 'first', 'last', 'rest',
+                    'str', 'int', 'type', 'upper', 'lower',
+                    'keys', 'values', 'has', 'range',
+                    'map', 'filter', 'reduce',
+                    'abs', 'min', 'max', 'sqrt', 'pow',
+                    'split', 'join', 'trim', 'contains', 'replace', 'format'
+                ],
+                tokenizer: {
+                    root: [
+                        [/\/\/.*/, 'comment'],
+                        [/\/\*/, 'comment', '@comment'],
+                        [/[a-zA-Z_]\w*/, {
+                            cases: {
+                                '@keywords': 'keyword',
+                                '@typeKeywords': 'typeKeyword',
+                                '@builtins': 'builtin',
+                                '@default': 'identifier'
+                            }
+                        }],
+                        [/\d+\.\d+/, 'number'],
+                        [/\d+/, 'number'],
+                        [/"([^"\\]|\\.)*$/, 'string.invalid'],
+                        [/"/, 'string', '@string'],
+                        [/'[^']*'/, 'string'],
+                        [/\|>/, 'operator'],
+                        [/[+\-*/%]=/, 'operator'],
+                        [/&&|\|\|/, 'operator'],
+                        [/[=!<>]=?/, 'operator'],
+                        [/[+\-*/%]/, 'operator'],
+                    ],
+                    comment: [
+                        [/[^/*]+/, 'comment'],
+                        [/\*\//, 'comment', '@pop'],
+                        [/[/*]/, 'comment']
+                    ],
+                    string: [
+                        [/[^\\"]+/, 'string'],
+                        [/\\./, 'string.escape'],
+                        [/"/, 'string', '@pop']
+                    ]
+                }
+            });
+            monaco.editor.defineTheme('vericodeTheme', {
+                base: 'vs-dark',
+                inherit: true,
+                rules: [
+                    { token: 'keyword', foreground: 'C4B5FD', fontStyle: 'bold' },
+                    { token: 'typeKeyword', foreground: 'F0ABFC', fontStyle: 'bold' },
+                    { token: 'builtin', foreground: '6EE7B7' },
+                    { token: 'string', foreground: 'FDE68A' },
+                    { token: 'comment', foreground: '71717A', fontStyle: 'italic' },
+                    { token: 'number', foreground: '7DD3FC' },
+                    { token: 'operator', foreground: 'E879F9' },
+                    { token: 'identifier', foreground: 'E4E4E7' },
+                ],
+                colors: {
+                    'editor.background': '#100e1c',
+                    'editor.lineHighlightBackground': '#1c1730',
+                    'editorGutter.background': '#100e1c',
+                    'editorLineNumber.foreground': '#52525b',
+                    'editorLineNumber.activeForeground': '#a1a1aa',
+                    'editorCursor.foreground': '#E879F9',
+                    'editor.selectionBackground': '#6d28d980',
+                }
+            });
+            editor = monaco.editor.create(document.getElementById('monacoEditor'), {
+                value: presets.hello.code,
+                language: 'vericode',
+                theme: 'vericodeTheme',
+                automaticLayout: true,
+                fontSize: 14,
+                lineHeight: 22,
+                fontFamily: '"IBM Plex Mono", "JetBrains Mono", Consolas, monospace',
+                minimap: { enabled: false },
+                padding: { top: 12, bottom: 12 },
+                scrollBeyondLastLine: false,
+                renderLineHighlight: 'line',
+                smoothScrolling: true,
+            });
+            // Ctrl+Enter — run
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, runCode);
+            // Ctrl+L — clear console
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL, clearConsole);
+            // Ctrl+S — export / save
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, exportCode);
+        });
+
+        document.getElementById('presetSelect').addEventListener('change', (e) => {
+            const p = presets[e.target.value];
+            if (editor && p) {
+                editor.setValue(p.code);
+                document.getElementById('exampleHint').textContent = p.hint;
+                setFileLabel(e.target.value + '.veri');
+            }
+        });
+
+        const gutter = document.getElementById('gutter');
+        const editorPane = document.getElementById('editorPane');
+        const workspace = document.getElementById('workspace');
+        let dragging = false;
+        gutter.addEventListener('mousedown', (e) => {
+            dragging = true;
+            gutter.classList.add('dragging');
+            e.preventDefault();
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragging) return;
+            const rect = workspace.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const min = 280;
+            const max = rect.width - 260;
+            const left = Math.max(min, Math.min(max, x));
+            editorPane.style.flex = '0 0 ' + left + 'px';
+        });
+        window.addEventListener('mouseup', () => {
+            dragging = false;
+            gutter.classList.remove('dragging');
+        });
+
+        function setStatus(state, label) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            dot.className = 'status-dot' + (state === 'success' ? ' ok' : state === 'error' ? ' err' : state === 'run' ? ' run' : '');
+            text.textContent = label;
+        }
+
+        function emptyOutput() {
+            return '<div class="h-full flex flex-col items-center justify-center text-center text-zinc-500 py-10"><p class="text-zinc-400 text-sm font-medium">No output yet</p><p class="text-[12px] mt-1 max-w-[220px]">Run a program. Prints land here — the warehouse floor.</p></div>';
+        }
+
+        function emptyProblems() {
+            return '<div class="h-full flex flex-col items-center justify-center text-center text-zinc-500 py-10"><p class="text-zinc-400 text-sm font-medium">No problems</p><p class="text-[12px] mt-1">The compiler will list anything it refuses here.</p></div>';
+        }
+
+        function recordActivity(ok, ms, preview) {
+            activityStats.runs += 1;
+            if (ok) activityStats.ok += 1; else activityStats.err += 1;
+            activityLog.unshift({
+                t: new Date().toLocaleTimeString(),
+                ok: ok,
+                ms: ms,
+                preview: (preview || '').slice(0, 80)
+            });
+            if (activityLog.length > 20) activityLog.length = 20;
+            const runs = document.getElementById('actRuns');
+            const okEl = document.getElementById('actOk');
+            const errEl = document.getElementById('actErr');
+            const log = document.getElementById('actLog');
+            if (runs) runs.textContent = String(activityStats.runs);
+            if (okEl) okEl.textContent = String(activityStats.ok);
+            if (errEl) errEl.textContent = String(activityStats.err);
+            if (log) {
+                log.innerHTML = activityLog.map(e => {
+                    const badge = e.ok
+                        ? '<span class="text-emerald-400">ok</span>'
+                        : '<span class="text-rose-400">err</span>';
+                    const prev = e.preview
+                        ? '<div class="text-zinc-500 truncate mt-0.5">' + escapeHtml(e.preview) + '</div>'
+                        : '';
+                    return '<div class="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2">' +
+                        '<div class="flex items-center justify-between gap-2">' +
+                        '<span class="mono text-[11px] text-zinc-400">' + e.t + '</span>' +
+                        '<span class="mono text-[11px]">' + badge + ' · ' + e.ms.toFixed(1) + ' ms</span>' +
+                        '</div>' + prev + '</div>';
+                }).join('');
+            }
+            const meta = document.getElementById('runtimeMeta');
+            if (meta) {
+                meta.textContent = activityStats.runs + ' run' + (activityStats.runs === 1 ? '' : 's') +
+                    ' · ' + activityStats.ok + ' ok · ' + activityStats.err + ' err';
+            }
+        }
+
+        async function runCode() {
+            if (!editor) return;
+            const code = editor.getValue().replace(/\u00A0/g, ' ');
+            const out = document.getElementById('panel-output');
+            const runBtn = document.getElementById('runBtn');
+            const runLabel = document.getElementById('runLabel');
+            document.getElementById('execTime').innerText = '';
+            out.innerHTML = '<div class="text-zinc-500 italic">Running…</div>';
+            setStatus('run', 'Running');
+            runBtn.disabled = true;
+            runLabel.textContent = 'Running';
+            showTab('output');
+            const t0 = performance.now();
+
+            try {
+                const res = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code }),
+                });
+                const t1 = performance.now();
+                document.getElementById('execTime').innerText = (t1 - t0).toFixed(1) + ' ms';
+                const data = await res.json();
+                if (data.errors) {
+                    setStatus('error', 'Error');
+                    renderOutput('');
+                    renderProblems(data.errors);
+                    recordActivity(false, t1 - t0, data.errors);
+                    showTab('problems');
+                } else {
+                    setStatus('success', 'Success');
+                    renderProblems('');
+                    renderOutput(data.output || '');
+                    recordActivity(true, t1 - t0, data.output || '');
+                    showTab('output');
+                }
+            } catch (err) {
+                const t1 = performance.now();
+                document.getElementById('execTime').innerText = (t1 - t0).toFixed(1) + ' ms';
+                setStatus('error', 'Server offline');
+                renderProblems('Could not reach the VeriCode server.\nStart it with: go run . -web');
+                recordActivity(false, t1 - t0, 'server offline');
+                showTab('problems');
+            } finally {
+                runBtn.disabled = false;
+                runLabel.textContent = 'Run';
+            }
+        }
+
+        function renderOutput(output) {
+            const el = document.getElementById('panel-output');
+            const text = String(output ?? '').trim();
+            if (!text || text === '(no output)') {
+                el.innerHTML = '<div class="text-zinc-500 italic">(no output)</div>';
+                return;
+            }
+            el.innerHTML = '';
+            const pre = document.createElement('pre');
+            pre.style.cssText = 'margin:0;padding:0;font:inherit;white-space:pre-wrap;word-break:break-word;line-height:1.8;';
+            pre.textContent = text;
+            el.appendChild(pre);
+        }
+
+        function parseProblemLocations(msg) {
+            const raw = String(msg || '');
+            const problems = [];
+            // Format A: [line N, col M] message
+            const reA = /\[line (\d+), col (\d+)\]\s*(.*)/g;
+            let m;
+            while ((m = reA.exec(raw)) !== null) {
+                problems.push({ line: +m[1], col: +m[2], message: m[3].trim() });
+            }
+            // Format B: --> file:line:col  (diagnostic style)
+            const reB = /-->\s*[^:\s]+:(\d+):(\d+)/g;
+            while ((m = reB.exec(raw)) !== null) {
+                // Prefer a human message from "Error [...]: msg" if present
+                const errM = raw.match(/Error \[[^\]]+\]:\s*(.+)/);
+                const message = errM ? errM[1].trim() : ('error at ' + m[1] + ':' + m[2]);
+                // Avoid duplicates if both formats appear
+                if (!problems.some(p => p.line === +m[1] && p.col === +m[2])) {
+                    problems.push({ line: +m[1], col: +m[2], message });
+                }
+            }
+            if (problems.length === 0 && raw.trim()) {
+                // Strip ANSI color codes for display
+                const clean = raw.replace(/\x1b\[[0-9;]*m/g, '').trim();
+                problems.push({ line: 0, col: 0, message: clean });
+            }
+            return problems;
+        }
+
+        function renderProblems(msg) {
+            const el = document.getElementById('panel-problems');
+            const count = document.getElementById('problemCount');
+            lastProblems = parseProblemLocations(msg);
+            if (!msg || !String(msg).trim() || lastProblems.length === 0) {
+                count.textContent = '0';
+                count.className = 'text-zinc-600';
+                el.innerHTML = emptyProblems();
+                lastProblems = [];
+                return;
+            }
+            el.innerHTML = '';
+            count.textContent = String(lastProblems.length);
+            count.className = 'text-rose-400';
+            lastProblems.forEach(p => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'error-row w-full text-left bg-rose-950/25 border border-rose-500/20 rounded-lg px-3 py-2 mb-2 text-rose-200 text-xs font-mono';
+                if (p.line > 0) {
+                    row.innerHTML = '<span class="text-rose-400">Line ' + p.line + ':' + p.col + '</span>  ' +
+                        escapeHtml(p.message);
+                    row.title = 'Jump to line ' + p.line;
+                    row.addEventListener('click', () => {
+                        if (!editor) return;
+                        editor.setPosition({ lineNumber: p.line, column: Math.max(1, p.col) });
+                        editor.revealLineInCenter(p.line);
+                        editor.focus();
+                    });
+                } else {
+                    row.textContent = p.message;
+                }
+                el.appendChild(row);
+            });
+        }
+
+        function escapeHtml(s) {
+            return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        function clearConsole() {
+            document.getElementById('panel-output').innerHTML = emptyOutput();
+            renderProblems('');
+            setStatus('', 'Ready');
+            document.getElementById('execTime').innerText = '';
+            showTab('output');
+        }
+
+        function exportCode() {
+            if (!editor) return;
+            // Sync from the visible label in case the user typed but didn't blur yet
+            const label = document.getElementById('fileLabel');
+            if (label) setFileLabel(label.value);
+
+            let name = currentFile;
+            // If still the default name, offer a quick rename prompt
+            if (name === 'untitled.veri') {
+                const typed = prompt('Save as (filename):', name);
+                if (typed === null) return; // cancelled
+                setFileLabel(typed);
+                name = currentFile;
+            }
+
+            const blob = new Blob([editor.getValue()], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name;
+            a.click();
+            URL.revokeObjectURL(a.href);
+            setStatus('ok', 'Saved as ' + name);
+        }
+
+        function openFile(e) {
+            const file = e.target.files[0];
+            if (!file || !editor) return;
+            const reader = new FileReader();
+            reader.onload = evt => {
+                editor.setValue(evt.target.result);
+                setFileLabel(file.name);
+                document.getElementById('exampleHint').textContent = 'Opened from disk. Run when you are ready.';
+            };
+            reader.readAsText(file);
+            e.target.value = '';
+        }
+    </script>
+</body>
+</html>

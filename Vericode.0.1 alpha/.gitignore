@@ -1,0 +1,19 @@
+# Binaries
+veri
+veri.exe
+mylang
+mylang.exe
+*.exe
+*.test
+
+# Go
+*.out
+/vendor/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

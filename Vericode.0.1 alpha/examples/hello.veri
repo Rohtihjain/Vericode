@@ -1,0 +1,12 @@
+// VeriCode 0.1 — hello
+let name = "World";
+print "Hello, ${name}!";
+
+func add(a, b) {
+  return a + b;
+}
+print "2 + 3 = ${add(2, 3)}";
+
+print 1e3;
+print [10, 20, 30, 40][1:3];
+print "abcdef"[2:5];

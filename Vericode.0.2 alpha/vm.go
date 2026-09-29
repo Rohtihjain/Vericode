@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 )
 
 // ─── Call frame ───────────────────────────────────────────────────────────────
@@ -25,7 +26,7 @@ type VM struct {
 	stack       []Object
 	sp          int
 	globals     []Object
-	output      []string
+	out         *OutputCollector
 	lastPopped  Object
 	frames      [512]frame
 	frameCount  int
@@ -33,6 +34,10 @@ type VM struct {
 	sourceMap   []SourceLocation
 	source      string
 	filename    string
+	cancel       chan struct{}   // closed when this VM's subtree is cancelled
+	parentCancel <-chan struct{} // fires when an ancestor VM is cancelled (nil for the root VM)
+	killOnce     *sync.Once
+	tasks        []*TaskObj // tasks spawned by this VM (direct children)
 }
 
 func NewVM(bytecode *Bytecode) *VM {
@@ -40,10 +45,13 @@ func NewVM(bytecode *Bytecode) *VM {
 		constants: bytecode.Constants,
 		stack:     make([]Object, 65536),
 		globals:   make([]Object, 65536),
+		out:       &OutputCollector{},
 		input:     os.Stdin,
 		sourceMap: bytecode.SourceMap,
 		source:    bytecode.Source,
 		filename:  bytecode.Filename,
+		cancel:    make(chan struct{}),
+		killOnce:  &sync.Once{},
 	}
 	vm.frames[0] = frame{ip: -1, instructions: bytecode.Instructions}
 	vm.frameCount = 1
@@ -102,14 +110,47 @@ func (vm *VM) pop() Object {
 }
 
 func (vm *VM) LastPoppedStackElem() Object { return vm.lastPopped }
-func (vm *VM) Output() string              { return strings.Join(vm.output, "\n") }
+func (vm *VM) Output() string              { return vm.out.String() }
+
+// kill closes this VM's cancellation channel, waking any blocked
+// send/recv/await/sleep in its subtree. Cancellation cascades: a woken task
+// returns an error, and runAndWait then kills its own subtree.
+func (vm *VM) kill() { vm.killOnce.Do(func() { close(vm.cancel) }) }
+
+// runAndWait runs this VM's program, then waits for all tasks it spawned
+// (transitively — each child waits for its own children). If the program or
+// any unawaited child failed, the first error is returned.
+func (vm *VM) runAndWait() error {
+	err := vm.runUntilDepth(0)
+	if err != nil {
+		vm.kill()
+	}
+	var childErr error
+	for _, t := range vm.tasks {
+		select {
+		case <-t.Done:
+		case <-vm.cancel:
+		case <-vm.parentCancel:
+		}
+		if childErr == nil && t.Err != nil {
+			childErr = t.Err
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return childErr
+}
+
+// Run executes the program until all frames are exhausted, waits for all
+// spawned tasks, and shuts down the cancellation channel.
+func (vm *VM) Run() error {
+	err := vm.runAndWait()
+	vm.kill()
+	return err
+}
 
 // ─── Main execution loop ──────────────────────────────────────────────────────
-
-// Run executes the program until all frames are exhausted.
-func (vm *VM) Run() error {
-	return vm.runUntilDepth(0)
-}
 
 // runUntilDepth runs until frameCount drops to targetDepth.
 // CallFn uses this to execute a nested compiled function inline.
@@ -169,7 +210,7 @@ func (vm *VM) runUntilDepth(targetDepth int) error {
 		case OpPrint:
 			val := vm.pop()
 			if val != nil {
-				vm.output = append(vm.output, val.Inspect())
+				vm.out.append(val.Inspect())
 			}
 
 		case OpSetGlobal:
@@ -340,31 +381,35 @@ func (vm *VM) runUntilDepth(targetDepth int) error {
 				if numArgs != fn.Fn.NumParams {
 					return vm.runtimeError("wrong number of arguments: expected %d, got %d", fn.Fn.NumParams, numArgs)
 				}
+				bp := vm.sp - numArgs
 				vm.pushFrame(frame{
 					ip:           -1,
-					basePointer:  vm.sp - numArgs,
+					basePointer:  bp,
 					instructions: fn.Fn.Instructions,
 					cl:           fn,
 				})
+				// Reserve slots for all body locals so expression temporaries
+				// never clobber them.
+				vm.sp = bp + fn.Fn.NumLocals
 
 			case *CompiledFunction:
 				// Bare compiled function (no free vars) — wrap as empty closure
 				if numArgs != fn.NumParams {
 					return vm.runtimeError("wrong number of arguments: expected %d, got %d", fn.NumParams, numArgs)
 				}
+				bp := vm.sp - numArgs
 				vm.pushFrame(frame{
 					ip:           -1,
-					basePointer:  vm.sp - numArgs,
+					basePointer:  bp,
 					instructions: fn.Instructions,
 					cl:           &Closure{Fn: fn},
 				})
+				vm.sp = bp + fn.NumLocals
 
 			case *Builtin:
 				args := make([]Object, numArgs)
 				copy(args, vm.stack[vm.sp-numArgs:vm.sp])
-				currentVM = vm
-				result := fn.Fn(args...)
-				currentVM = nil
+				result := fn.Fn(vm, args...)
 				vm.sp = vm.sp - numArgs - 1
 				if result == nil {
 					result = &Null{}
@@ -438,6 +483,21 @@ func (vm *VM) runUntilDepth(targetDepth int) error {
 			pf := vm.popFrame()
 			vm.sp = pf.basePointer - 1
 			if err := vm.push(&Null{}); err != nil {
+				return err
+			}
+
+		case OpSpawn:
+			numArgs := int(binary.BigEndian.Uint16(ins[f.ip+1:]))
+			f.ip += 2
+			args := make([]Object, numArgs)
+			copy(args, vm.stack[vm.sp-numArgs:vm.sp])
+			fnObj := vm.stack[vm.sp-numArgs-1]
+			vm.sp = vm.sp - numArgs - 1
+			task := vm.spawnTask(fnObj, args)
+			if err, ok := task.(*Error); ok {
+				return vm.runtimeError("%s", err.Message)
+			}
+			if err := vm.push(task); err != nil {
 				return err
 			}
 		}
@@ -783,7 +843,7 @@ func (vm *VM) executeComparison(op Opcode, left, right Object) error {
 func (vm *VM) CallFn(fnObj Object, args ...Object) (Object, error) {
 	switch fn := fnObj.(type) {
 	case *Builtin:
-		result := fn.Fn(args...)
+		result := fn.Fn(vm, args...)
 		if result == nil {
 			return &Null{}, nil
 		}
@@ -803,12 +863,14 @@ func (vm *VM) CallFn(fnObj Object, args ...Object) (Object, error) {
 			}
 		}
 		startDepth := vm.frameCount
+		bp := vm.sp - len(args)
 		vm.pushFrame(frame{
 			ip:           -1,
-			basePointer:  vm.sp - len(args),
+			basePointer:  bp,
 			instructions: fn.Fn.Instructions,
 			cl:           fn,
 		})
+		vm.sp = bp + fn.Fn.NumLocals
 		if err := vm.runUntilDepth(startDepth); err != nil {
 			vm.sp = savedSP
 			return nil, err

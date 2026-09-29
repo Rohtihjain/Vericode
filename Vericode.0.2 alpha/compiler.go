@@ -425,6 +425,7 @@ func (c *Compiler) Compile(node Node) error {
 			Instructions: fnC.instructions,
 			NumParams:    len(node.Parameters),
 			NumFrees:     len(fnC.freeSymbols),
+			NumLocals:    len(fnC.localTable),
 			SourceMap:    fnC.sourceMap,
 			Filename:     fnC.filename,
 			Name:         node.Name,
@@ -457,6 +458,28 @@ func (c *Compiler) Compile(node Node) error {
 		// Point diagnostics at the callee (e.g. abs), not the last argument
 		c.setNodeLoc(node.Function)
 		c.emit(OpCall, len(node.Arguments))
+
+	case *AwaitExpression:
+		if bi, ok := builtinIndex["await"]; ok {
+			c.emit(OpGetBuiltin, bi)
+		}
+		if err := c.Compile(node.Task); err != nil {
+			return err
+		}
+		c.setNodeLoc(node)
+		c.emit(OpCall, 1)
+
+	case *SpawnExpression:
+		if err := c.Compile(node.Call.Function); err != nil {
+			return err
+		}
+		for _, arg := range node.Call.Arguments {
+			if err := c.Compile(arg); err != nil {
+				return err
+			}
+		}
+		c.setNodeLoc(node)
+		c.emit(OpSpawn, len(node.Call.Arguments))
 
 	case *ArrayLiteral:
 		for _, el := range node.Elements {

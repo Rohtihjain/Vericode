@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VeriCode 0.1 alpha — Studio</title>
+    <title>VeriCode 0.2 alpha — Studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -166,6 +166,7 @@
                 <option value="functions">Functions</option>
                 <option value="collections">Collections</option>
                 <option value="functional">Functional</option>
+                <option value="concurrency">Concurrency</option>
                 <option value="types">Floats &amp; Null</option>
                 <option value="kitchen">Kitchen Sink</option>
             </select>
@@ -388,6 +389,39 @@
                     'print "sum = " + str(sum);',
                 ].join('\n')
             },
+            concurrency: {
+                hint: 'spawn tasks, talk over channels, collect results with await.',
+                code: [
+                    '// Tasks are isolated: each gets a snapshot of your',
+                    '// variables. Channels are the one shared thing.',
+                    'let ch = chan(3);',
+                    '',
+                    'let worker = func(name, n) {',
+                    '    loop i in range(0, n) {',
+                    '        send(ch, name + str(i));',
+                    '    }',
+                    '};',
+                    '',
+                    'let t1 = spawn worker("a", 3);',
+                    'let t2 = spawn worker("b", 3);',
+                    '',
+                    '// Receive BEFORE awaiting: sends block once the',
+                    '// buffer is full until someone receives.',
+                    'let results = [];',
+                    'loop 6 times {',
+                    '    results = push(results, recv(ch));',
+                    '}',
+                    'await t1;',
+                    'await t2;',
+                    '',
+                    'print len(results);',
+                    'print "got: " + join(results, " ");',
+                    '',
+                    '// await returns the task result directly',
+                    'let t = spawn func(a, b) { return a + b; }(19, 23);',
+                    'print "19 + 23 = " + str(await t);',
+                ].join('\n')
+            },
             types: {
                 hint: 'Floats, null, interpolation, format, and math/string helpers.',
                 code: [
@@ -509,7 +543,8 @@
             monaco.languages.setMonarchTokensProvider('vericode', {
                 keywords: [
                     'let', 'print', 'if', 'else', 'func', 'return',
-                    'loop', 'while', 'times', 'in', 'ask', 'break', 'continue'
+                    'loop', 'while', 'times', 'in', 'ask', 'break', 'continue',
+                    'spawn', 'await'
                 ],
                 typeKeywords: ['true', 'false', 'null'],
                 builtins: [
@@ -518,7 +553,8 @@
                     'keys', 'values', 'has', 'range',
                     'map', 'filter', 'reduce',
                     'abs', 'min', 'max', 'sqrt', 'pow',
-                    'split', 'join', 'trim', 'contains', 'replace', 'format'
+                    'split', 'join', 'trim', 'contains', 'replace', 'format',
+                    'chan', 'send', 'recv', 'sleep'
                 ],
                 tokenizer: {
                     root: [

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 )
 
 // Builtins is the ordered list of built-in functions.
@@ -13,7 +14,7 @@ import (
 var Builtins = []*Builtin{
 	{
 		Name: "len",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("len() takes 1 argument, got %d", len(args))
 			}
@@ -29,7 +30,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "push",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 2 {
 				return newError("push() takes 2 arguments, got %d", len(args))
 			}
@@ -45,7 +46,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "pop",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("pop() takes 1 argument, got %d", len(args))
 			}
@@ -63,7 +64,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "first",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("first() takes 1 argument, got %d", len(args))
 			}
@@ -79,7 +80,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "last",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("last() takes 1 argument, got %d", len(args))
 			}
@@ -95,7 +96,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "rest",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("rest() takes 1 argument, got %d", len(args))
 			}
@@ -113,7 +114,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "str",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("str() takes 1 argument, got %d", len(args))
 			}
@@ -122,7 +123,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "int",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("int() takes 1 argument, got %d", len(args))
 			}
@@ -145,7 +146,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "type",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("type() takes 1 argument, got %d", len(args))
 			}
@@ -154,7 +155,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "upper",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("upper() takes 1 argument, got %d", len(args))
 			}
@@ -167,7 +168,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "lower",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("lower() takes 1 argument, got %d", len(args))
 			}
@@ -180,7 +181,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "keys",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("keys() takes 1 argument, got %d", len(args))
 			}
@@ -197,7 +198,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "values",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("values() takes 1 argument, got %d", len(args))
 			}
@@ -214,7 +215,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "has",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 2 {
 				return newError("has() takes 2 arguments, got %d", len(args))
 			}
@@ -232,7 +233,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "range",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) < 1 || len(args) > 3 {
 				return newError("range() takes 1-3 arguments, got %d", len(args))
 			}
@@ -282,7 +283,7 @@ var Builtins = []*Builtin{
 	// ─── Math ───────────────────────────────────────────────────────────────
 	{
 		Name: "abs",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("abs() takes 1 argument, got %d", len(args))
 			}
@@ -302,7 +303,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "min",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) < 1 {
 				return newError("min() takes at least 1 argument, got %d", len(args))
 			}
@@ -311,7 +312,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "max",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) < 1 {
 				return newError("max() takes at least 1 argument, got %d", len(args))
 			}
@@ -320,7 +321,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "sqrt",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("sqrt() takes 1 argument, got %d", len(args))
 			}
@@ -336,7 +337,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "pow",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 2 {
 				return newError("pow() takes 2 arguments, got %d", len(args))
 			}
@@ -351,7 +352,7 @@ var Builtins = []*Builtin{
 	// ─── String ─────────────────────────────────────────────────────────────
 	{
 		Name: "split",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 2 {
 				return newError("split() takes 2 arguments (string, sep), got %d", len(args))
 			}
@@ -370,7 +371,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "join",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 2 {
 				return newError("join() takes 2 arguments (array, sep), got %d", len(args))
 			}
@@ -391,7 +392,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "trim",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 1 {
 				return newError("trim() takes 1 argument, got %d", len(args))
 			}
@@ -404,7 +405,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "contains",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 2 {
 				return newError("contains() takes 2 arguments, got %d", len(args))
 			}
@@ -418,7 +419,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "replace",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 3 {
 				return newError("replace() takes 3 arguments (string, old, new), got %d", len(args))
 			}
@@ -433,7 +434,7 @@ var Builtins = []*Builtin{
 	},
 	{
 		Name: "format",
-		Fn: func(args ...Object) Object {
+		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) < 1 {
 				return newError("format() takes at least 1 argument (template), got %d", len(args))
 			}
@@ -464,7 +465,7 @@ func init() {
 	Builtins = append(Builtins,
 		&Builtin{
 			Name: "map",
-			Fn: func(args ...Object) Object {
+			Fn: func(vm *VM, args ...Object) Object {
 				if len(args) != 2 {
 					return newError("map() takes 2 arguments (array, func), got %d", len(args))
 				}
@@ -477,14 +478,14 @@ func init() {
 				}
 				result := make([]Object, len(arr.Elements))
 				for i, el := range arr.Elements {
-					result[i] = callUserFn(args[1], el)
+					result[i] = callUserFn(vm, args[1], el)
 				}
 				return &Array{Elements: result}
 			},
 		},
 		&Builtin{
 			Name: "filter",
-			Fn: func(args ...Object) Object {
+			Fn: func(vm *VM, args ...Object) Object {
 				if len(args) != 2 {
 					return newError("filter() takes 2 arguments (array, func), got %d", len(args))
 				}
@@ -497,7 +498,7 @@ func init() {
 				}
 				var result []Object
 				for _, el := range arr.Elements {
-					keep := callUserFn(args[1], el)
+					keep := callUserFn(vm, args[1], el)
 					if isTruthy(keep) {
 						result = append(result, el)
 					}
@@ -510,7 +511,7 @@ func init() {
 		},
 		&Builtin{
 			Name: "reduce",
-			Fn: func(args ...Object) Object {
+			Fn: func(vm *VM, args ...Object) Object {
 				if len(args) != 3 {
 					return newError("reduce() takes 3 arguments (array, func, initial), got %d", len(args))
 				}
@@ -523,9 +524,119 @@ func init() {
 				}
 				acc := args[2]
 				for _, el := range arr.Elements {
-					acc = callUserFn(args[1], acc, el)
+					acc = callUserFn(vm, args[1], acc, el)
 				}
 				return acc
+			},
+		},
+		// ─── Concurrency ──────────────────────────────────────────────────────
+		&Builtin{
+			Name: "chan",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) > 1 {
+					return newError("chan() takes 0 or 1 arguments (capacity), got %d", len(args))
+				}
+				cap := 0
+				if len(args) == 1 {
+					n, ok := args[0].(*Integer)
+					if !ok {
+						return newError("chan() capacity must be an integer, got %s", args[0].Type())
+					}
+					if n.Value < 0 {
+						return newError("chan() capacity cannot be negative")
+					}
+					cap = int(n.Value)
+				}
+				return &ChannelObj{Ch: make(chan Object, cap), Cap: cap}
+			},
+		},
+		&Builtin{
+			Name: "send",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) != 2 {
+					return newError("send() takes 2 arguments (channel, value), got %d", len(args))
+				}
+				ch, ok := args[0].(*ChannelObj)
+				if !ok {
+					return newError("send() first argument must be a channel, got %s", args[0].Type())
+				}
+				select {
+				case ch.Ch <- args[1]:
+					return &Null{}
+				case <-vm.cancel:
+					return newError("task cancelled")
+				case <-vm.parentCancel:
+					return newError("task cancelled")
+				}
+			},
+		},
+		&Builtin{
+			Name: "recv",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) != 1 {
+					return newError("recv() takes 1 argument (channel), got %d", len(args))
+				}
+				ch, ok := args[0].(*ChannelObj)
+				if !ok {
+					return newError("recv() first argument must be a channel, got %s", args[0].Type())
+				}
+				select {
+				case v := <-ch.Ch:
+					return v
+				case <-vm.cancel:
+					return newError("task cancelled")
+				case <-vm.parentCancel:
+					return newError("task cancelled")
+				}
+			},
+		},
+		&Builtin{
+			Name: "await",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) != 1 {
+					return newError("await() takes 1 argument (task), got %d", len(args))
+				}
+				task, ok := args[0].(*TaskObj)
+				if !ok {
+					return newError("await() argument must be a task, got %s", args[0].Type())
+				}
+				select {
+				case <-task.Done:
+					if task.Err != nil {
+						return newError("task failed: %s", task.Err.Error())
+					}
+					if task.Result == nil {
+						return &Null{}
+					}
+					return task.Result
+				case <-vm.cancel:
+					return newError("task cancelled")
+				case <-vm.parentCancel:
+					return newError("task cancelled")
+				}
+			},
+		},
+		&Builtin{
+			Name: "sleep",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) != 1 {
+					return newError("sleep() takes 1 argument (milliseconds), got %d", len(args))
+				}
+				ms, ok := args[0].(*Integer)
+				if !ok {
+					return newError("sleep() argument must be an integer (milliseconds), got %s", args[0].Type())
+				}
+				timer := time.NewTimer(time.Duration(ms.Value) * time.Millisecond)
+				select {
+				case <-timer.C:
+					return &Null{}
+				case <-vm.cancel:
+					timer.Stop()
+					return newError("task cancelled")
+				case <-vm.parentCancel:
+					timer.Stop()
+					return newError("task cancelled")
+				}
 			},
 		},
 	)
@@ -542,15 +653,12 @@ func newError(format string, args ...interface{}) Object {
 }
 
 // callUserFn invokes a Builtin, Closure, or CompiledFunction with the given args.
-func callUserFn(fnObj Object, args ...Object) Object {
+func callUserFn(vm *VM, fnObj Object, args ...Object) Object {
 	switch fn := fnObj.(type) {
 	case *Builtin:
-		return fn.Fn(args...)
+		return fn.Fn(vm, args...)
 	case *Closure, *CompiledFunction:
-		if currentVM == nil {
-			return newError("no VM context available for function call")
-		}
-		result, err := currentVM.CallFn(fnObj, args...)
+		result, err := vm.CallFn(fnObj, args...)
 		if err != nil {
 			return newError("%s", err.Error())
 		}
@@ -568,11 +676,6 @@ func isFunc(obj Object) bool {
 		return false
 	}
 }
-
-// currentVM is set by the VM before calling builtins, so map/filter/reduce
-// can invoke compiled user functions with the correct constants and globals.
-var currentVM *VM
-
 
 func asFloatObj(o Object) (float64, bool) {
 	switch v := o.(type) {

@@ -462,3 +462,25 @@ func (ae *AskExpression) String() string {
 	}
 	return "ask"
 }
+
+// spawn <call> — starts the call in a new lightweight task and evaluates to
+// a task handle, e.g. spawn worker(ch, 10)  or  spawn producer
+type SpawnExpression struct {
+	Token Token // the SPAWN token
+	Call  *CallExpression
+}
+
+func (se *SpawnExpression) expressionNode()      {}
+func (se *SpawnExpression) TokenLiteral() string { return se.Token.Literal }
+func (se *SpawnExpression) String() string       { return "spawn " + se.Call.String() }
+
+// await <task> — blocks until the task finishes and evaluates to its result
+// (or raises its error), e.g. await t  or  await(worker(ch))
+type AwaitExpression struct {
+	Token Token // the AWAIT token
+	Task  Expression
+}
+
+func (ae *AwaitExpression) expressionNode()      {}
+func (ae *AwaitExpression) TokenLiteral() string { return ae.Token.Literal }
+func (ae *AwaitExpression) String() string       { return "await " + ae.Task.String() }

@@ -1,0 +1,47 @@
+// VeriCode 0.2 — concurrency: spawn, await, channels.
+//
+// Tasks are isolated: each spawned task gets a snapshot of the parent's
+// variables, so there are no data races by construction. Channels are the
+// one shared thing — the way tasks talk to each other.
+
+let ch = chan();
+
+// Two workers produce values and push them into the channel.
+let worker = func(name, n) {
+    loop i in range(0, n) {
+        send(ch, name + str(i));
+    }
+};
+
+let t1 = spawn worker("a", 3);
+let t2 = spawn worker("b", 3);
+
+// Receive values as they arrive. Receive BEFORE awaiting the
+// workers — a buffered channel only holds `cap` sends, and workers
+// block on send until someone receives.
+let results = [];
+loop 6 times {
+    let v = recv(ch);
+    results = push(results, v);
+}
+
+// await returns a task's result, and re-raises its error here if
+// the task failed. Waiting for finished tasks is instant.
+await t1;
+await t2;
+
+print len(results);
+// order below is scheduling order — it can differ run to run
+print "got: " + join(results, " ");
+
+// await also hands back return values directly.
+let add = func(a, b) { return a + b; };
+let t = spawn add(19, 23);
+print "19 + 23 = " + str(await t);
+
+// sleep(ms) pauses the current task without blocking others.
+let slow = spawn func() {
+    sleep(100);
+    return "slow task done";
+}();
+print await slow;

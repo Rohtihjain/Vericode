@@ -44,6 +44,7 @@ const (
 	OpSetFree
 	OpSetIndex
 	OpSlice
+	OpSpawn
 )
 
 type Definition struct {
@@ -91,6 +92,7 @@ var definitions = map[Opcode]*Definition{
 	OpSetFree:            {"OpSetFree", []int{2}},
 	OpSetIndex:           {"OpSetIndex", nil},
 	OpSlice:              {"OpSlice", nil},
+	OpSpawn:              {"OpSpawn", []int{2}}, // num args
 }
 
 func Make(op Opcode, operands ...int) []byte {

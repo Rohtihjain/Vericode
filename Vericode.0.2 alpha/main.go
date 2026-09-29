@@ -152,7 +152,7 @@ func main() {
 		}
 
 	default:
-		fmt.Println("VeriCode 0.1 alpha")
+		fmt.Println("VeriCode 0.2 alpha")
 		fmt.Println("  veri -run <file.veri>   run a source file")
 		fmt.Println("  veri -web               start the web IDE on :8080")
 	}

@@ -1,6 +1,6 @@
 # VeriCode
 
-**0.1 alpha** — a small, evolving programming language written in Go.
+**0.2 alpha** — a small, evolving programming language written in Go.
 
 VeriCode starts as a clear, approachable language for learning and scripting. The long-term aim is to make **concurrency, parallelism, and data-oriented work** first-class and practical — so programs can grow from simple scripts into concurrent and data-heavy workloads without drowning in boilerplate.
 
@@ -19,15 +19,17 @@ Many languages support concurrency and large-scale data processing, but they oft
 * **A path from small to serious** — same language from `print "hello"` to concurrent and data-oriented programs
 * **Safe defaults** — design toward avoiding data races and surprising shared-state bugs
 
-**0.1** is the foundation: a solid sequential language and tooling.
+**0.1** was the foundation: a solid sequential language and tooling.
 
-**Later phases** add the concurrent and data layers on top of that foundation.
+**0.2** adds the first concurrent layer: lightweight tasks, channels, and a clear spawn/await model.
+
+**Later phases** add the parallel and data layers on top of that foundation.
 
 \---
 
-## Current status (0.1 alpha)
+## Current status (0.2 alpha)
 
-Usable for demos, learning, and sequential scripts. **Not** production-hardened. Concurrency, parallelism, and big-data features are **planned**, not shipped yet.
+Usable for demos, learning, sequential scripts, and cooperative concurrency. **Not** production-hardened. Parallelism and big-data features are **planned**, not shipped yet.
 
 ### What works today
 
@@ -40,6 +42,7 @@ Usable for demos, learning, and sequential scripts. **Not** production-hardened.
 |**Strings**|escapes, `${expr}` interpolation, `format("{}", ...)`|
 |**Collections**|arrays and hashes, index read/write, slicing (`arr\\\[1:3]`, `str\\\[:2]`)|
 |**Stdlib**|`len`, `push` / `pop`, `map` / `filter` / `reduce`, `range`, math (`abs`, `min`, `max`, `sqrt`, `pow`), string (`split`, `join`, `trim`, `contains`, `replace`, `format`)|
+|**Concurrency**|`spawn` tasks, `await` join, channels (`chan` / `send` / `recv`), `sleep`, snapshot-isolated task state|
 |**Tooling**|CLI runner, web IDE (Monaco), source-aware error messages|
 
 \---
@@ -48,8 +51,8 @@ Usable for demos, learning, and sequential scripts. **Not** production-hardened.
 
 |Phase|Theme|Direction|
 |-|-|-|
-|**0.1** (now)|Core language|Types, functions, slices, stdlib, CLI and web IDE|
-|**0.2**|Concurrency|Lightweight tasks, message passing / channels, clear spawn and join model|
+|**0.1**|Core language|Types, functions, slices, stdlib, CLI and web IDE|
+|**0.2** (now)|Concurrency|Lightweight tasks, message passing / channels, clear spawn and join model|
 |**0.3**|Parallelism|Parallel collection ops, worker pools, CPU-bound parallel loops|
 |**0.4**|Data-oriented|Pipelines, batch transforms, practical I/O (CSV/JSON), table-like structures|
 |**Later**|Scale and polish|Richer runtime, optional native hooks, tooling — only as the core stays solid|
@@ -139,7 +142,50 @@ print sqrt(16.0);
 print pow(2, 10);
 ```
 
+### Tasks and channels
+
+```veri
+let ch = chan(3);            // buffered channel (cap 3); chan() = unbuffered
+
+let worker = func(name, n) {
+  loop i in range(0, n) {
+    send(ch, name + str(i)); // blocks when the buffer is full
+  }
+};
+
+let t1 = spawn worker("a", 3); // runs on its own VM, in its own goroutine
+let t2 = spawn worker("b", 3);
+
+let results = [];
+loop 6 times {
+  results = push(results, recv(ch)); // receive BEFORE awaiting producers
+}
+await t1; // join: waits for the task, returns its result, re-raises its error
+await t2;
+
+print len(results);
+```
+
 \---
+
+## Concurrency (0.2)
+
+VeriCode's concurrency is **share-nothing with explicit sharing**:
+
+* **`spawn f(args)`** starts a task running `f` on its own VM in its own goroutine, and returns a task handle immediately.
+* **Snapshot isolation** — the task receives a *copy* of the parent's variables: arrays, hashes, and closures are deep-copied at spawn. A task cannot mutate the parent's state, so **there are no data races by construction**.
+* **Channels are the one shared thing.** `chan(n)` creates a buffered channel, `chan()` an unbuffered (rendezvous) one. `send(ch, v)` / `recv(ch)` move values between tasks; values pass through the channel itself.
+* **`await t`** joins a task: it waits for completion, returns the task's result, and re-raises the task's error at the `await` site.
+* **Errors surface even if you forget to join** — an unawaited task's failure ends the run with that error.
+* **Cancellation is tree-shaped.** If the main program fails, it cancels every task it spawned (and they cancel theirs). Blocked `send` / `recv` / `await` / `sleep` wake immediately with a cancellation error instead of leaking goroutines.
+* **`sleep(ms)`** pauses only the current task.
+* Print output from all tasks is collected on one shared, mutex-guarded stream — line order is scheduling order and intentionally unspecified.
+
+### Known limitations
+
+* **True deadlocks are not detected.** If every task blocks forever (e.g. awaiting producers while their sends fill a buffer nobody drains), the CLI aborts with Go's runtime `fatal error: all goroutines are asleep - deadlock!`, and in the web IDE the run request hangs until the browser gives up. Design programs so some task is always receiving.
+* Tasks are **not** killed mid-computation — cancellation is checked only at `send` / `recv` / `await` / `sleep`.
+* Concurrency is designed to be data-race free (snapshot isolation + shared-nothing VMs), but run `go test -race ./...` on a machine with a C compiler to verify on other platforms.
 
 ## Project layout
 
@@ -149,6 +195,7 @@ print pow(2, 10);
 ├── builtins.go      # Native functions
 ├── code.go          # Opcodes
 ├── compiler.go      # AST to bytecode (with source maps)
+├── concurrency.go   # Task spawning, snapshot isolation, shared output
 ├── diagnostic.go    # Error formatting
 ├── lexer.go         # Tokenizer
 ├── main.go          # CLI and embedded web server
@@ -168,6 +215,9 @@ print pow(2, 10);
 
 ```bash
 go test ./...
+
+# Concurrency is covered by the race detector on platforms with a C compiler:
+go test -race ./...
 ```
 
 \---
@@ -190,7 +240,7 @@ Programs run on the server via `POST /api/run`.
 
 \---
 
-## Language sketch (0.1)
+## Language sketch (0.2)
 
 ```veri
 let x = 10;
@@ -218,13 +268,22 @@ greet("World");
 let h = {"a": 1};
 h\\\["b"] = 2;
 print keys(h);
+
+// concurrency
+let ch = chan();
+let t = spawn func() {
+  send(ch, 42);
+  return "done";
+}();
+print recv(ch);
+print await t;
 ```
 
 \---
 
 ## Contributing
 
-Ideas, issues, and pull requests are welcome — especially for the sequential core (bugs, tests, examples) and early design discussion for **0.2 concurrency**.
+Ideas, issues, and pull requests are welcome — especially for the sequential core and concurrency model (bugs, tests, examples) and early design discussion for **0.3 parallelism**.
 
 Before proposing large features, open an issue so the design can stay consistent with the roadmap.
 

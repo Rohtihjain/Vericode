@@ -77,6 +77,8 @@ func NewParser(l *Lexer) *Parser {
 	p.registerPrefix(BANG, p.parsePrefixExpression)
 	p.registerPrefix(MINUS, p.parsePrefixExpression)
 	p.registerPrefix(ASK, p.parseAskExpression)
+	p.registerPrefix(SPAWN, p.parseSpawnExpression)
+	p.registerPrefix(AWAIT, p.parseAwaitExpression)
 
 	p.infixParseFns = make(map[TokenType]infixParseFn)
 	p.registerInfix(PLUS, p.parseInfixExpression)
@@ -795,6 +797,51 @@ func (p *Parser) parseAskExpression() Expression {
 		expr.Prompt = p.parseExpression(LOWEST)
 	}
 	return expr
+}
+
+// parseSpawnExpression parses: spawn f(args)  or  spawn f
+// The argument expressions are evaluated eagerly at spawn time; the call
+// itself runs in a new task.
+func (p *Parser) parseSpawnExpression() Expression {
+	expr := &SpawnExpression{Token: p.curToken}
+	p.nextToken()
+	target := p.parseExpression(PREFIX)
+	if target == nil {
+		return nil
+	}
+	if call, ok := target.(*CallExpression); ok {
+		expr.Call = call
+		return expr
+	}
+	// Bare function value: spawn f  →  spawn f()
+	if id, ok := target.(*Identifier); ok {
+		expr.Call = &CallExpression{
+			Token:     id.Token,
+			Function:  id,
+			Arguments: []Expression{},
+		}
+		return expr
+	}
+	p.addError(expr.Token, "'spawn' must be followed by a function or call, e.g. spawn worker(ch)")
+	return nil
+}
+
+// parseAwaitExpression parses: await t  or  await(t)  or  await makeTask()
+// The operand must evaluate to a task handle.
+func (p *Parser) parseAwaitExpression() Expression {
+	expr := &AwaitExpression{Token: p.curToken}
+	p.nextToken()
+	target := p.parseExpression(PREFIX)
+	if target == nil {
+		return nil
+	}
+	switch target.(type) {
+	case *Identifier, *CallExpression:
+		expr.Task = target
+		return expr
+	}
+	p.addError(expr.Token, "'await' must be followed by a task, e.g. await t")
+	return nil
 }
 
 func (p *Parser) parseExpressionList(end TokenType) []Expression {

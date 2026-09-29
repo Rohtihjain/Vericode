@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func compileAndRun(t testing.TB, input string) (Object, error) {
@@ -759,6 +760,216 @@ print s[:];
 		if lines[i] != want[i] {
 			t.Errorf("line %d: got %q want %q", i, lines[i], want[i])
 		}
+	}
+}
+
+// ─── Concurrency (0.2) ───────────────────────────────────────────────────────
+
+func TestSpawnAwaitResult(t *testing.T) {
+	out := mustRun(t, `
+let t = spawn func(a, b) { return a + b; }(19, 23);
+print await t;
+let u = spawn func() { return "hi"; }();
+print await u;
+`)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %q", out)
+	}
+	if lines[0] != "42" {
+		t.Errorf("line0 = %q, want 42", lines[0])
+	}
+	if lines[1] != "hi" {
+		t.Errorf("line1 = %q, want hi", lines[1])
+	}
+}
+
+func TestSpawnWrongArgs(t *testing.T) {
+	_, err := runSource(t, `
+let t = spawn func(a, b) { return a; }(1);
+await t;
+`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "wrong number of arguments") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestAwaitErrorPropagation(t *testing.T) {
+	_, err := runSource(t, `
+let t = spawn func() { return 1 / 0; }();
+await t;
+`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "division by zero") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestUnawaitedTaskErrorSurfaces(t *testing.T) {
+	_, err := runSource(t, `
+let t = spawn func() { return 1 / 0; }();
+print "main done";
+`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "division by zero") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestChannelsBuffered(t *testing.T) {
+	out := mustRun(t, `
+let ch = chan(2);
+send(ch, 10);
+send(ch, 20);
+let a = recv(ch);
+let b = recv(ch);
+print a + b;
+`)
+	if strings.TrimSpace(out) != "30" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestChannelsUnbufferedRendezvous(t *testing.T) {
+	out := mustRun(t, `
+let ch = chan();
+let t = spawn func() {
+    send(ch, "ping");
+    return 0;
+}();
+sleep(50);
+let v = recv(ch);
+print v;
+await t;
+`)
+	if strings.TrimSpace(out) != "ping" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestChannelsAreSharedAcrossTasks(t *testing.T) {
+	out := mustRun(t, `
+let ch = chan();
+let t1 = spawn func() { send(ch, 1); return 0; }();
+let t2 = spawn func() { send(ch, 2); return 0; }();
+let a = recv(ch);
+let b = recv(ch);
+await t1;
+await t2;
+print a + b;
+`)
+	if strings.TrimSpace(out) != "3" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestSleepBuiltin(t *testing.T) {
+	out := mustRun(t, `
+sleep(20);
+print "awake";
+`)
+	if strings.TrimSpace(out) != "awake" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestSnapshotIsolation(t *testing.T) {
+	out := mustRun(t, `
+let xs = [1, 2, 3];
+let n = 0;
+let getn = func() { return n; };
+let t = spawn func() {
+    xs = push(xs, 99);
+    n = 100;
+    return len(xs);
+}();
+let childLen = await t;
+print childLen;
+print len(xs);
+print n;
+print getn();
+`)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	want := []string{"4", "3", "0", "0"}
+	if len(lines) != 4 {
+		t.Fatalf("got %v", lines)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Errorf("line %d: got %q want %q", i, lines[i], want[i])
+		}
+	}
+}
+
+func TestTaskInspect(t *testing.T) {
+	out := mustRun(t, `
+let t = spawn func() { sleep(200); return 0; }();
+print t;
+await t;
+print t;
+`)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %v", lines)
+	}
+	if !strings.Contains(lines[0], "<task") || !strings.Contains(lines[0], "running") {
+		t.Errorf("running inspect: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "done") {
+		t.Errorf("done inspect: %q", lines[1])
+	}
+}
+
+func TestCancellationOnMainError(t *testing.T) {
+	start := time.Now()
+	_, err := runSource(t, `
+let t = spawn func() { sleep(60000); return 0; }();
+let x = 1 / 0;
+print x;
+`)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "division by zero") {
+		t.Errorf("got %v", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("cancellation took too long: %v", elapsed)
+	}
+}
+
+func TestConcurrencyStress(t *testing.T) {
+	// Main and a child hammer channels/globals; run with -race this validates
+	// the shared output collector and snapshot isolation.
+	out := mustRun(t, `
+let ch = chan(64);
+let t = spawn func() {
+    let i = 0;
+    loop while i < 100 {
+        send(ch, i);
+        i += 1;
+    }
+    return 0;
+}();
+let sum = 0;
+let i = 0;
+loop while i < 100 {
+    sum += recv(ch);
+    i += 1;
+}
+await t;
+print sum;
+`)
+	if strings.TrimSpace(out) != "4950" {
+		t.Fatalf("got %q", out)
 	}
 }
 

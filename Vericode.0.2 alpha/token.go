@@ -68,6 +68,8 @@ const (
 	ASK      = "ASK"
 	BREAK    = "BREAK"
 	CONTINUE = "CONTINUE"
+	SPAWN    = "SPAWN"
+	AWAIT    = "AWAIT"
 )
 
 var keywords = map[string]TokenType{
@@ -87,6 +89,8 @@ var keywords = map[string]TokenType{
 	"ask":      ASK,
 	"break":    BREAK,
 	"continue": CONTINUE,
+	"spawn":    SPAWN,
+	"await":    AWAIT,
 }
 
 func LookupIdent(ident string) TokenType {

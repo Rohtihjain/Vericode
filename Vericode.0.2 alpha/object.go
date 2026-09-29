@@ -19,6 +19,8 @@ const (
 	CLOSURE_OBJ     ObjectType = "CLOSURE"
 	BUILTIN_OBJ     ObjectType = "BUILTIN"
 	ERROR_OBJ       ObjectType = "ERROR"
+	CHANNEL_OBJ     ObjectType = "CHANNEL"
+	TASK_OBJ        ObjectType = "TASK"
 )
 
 type Object interface {
@@ -100,6 +102,7 @@ type CompiledFunction struct {
 	Instructions []byte
 	NumParams    int
 	NumFrees     int
+	NumLocals    int // total local slots (params + body locals); reserved on call
 	SourceMap    []SourceLocation
 	Name         string
 	Filename     string
@@ -139,7 +142,9 @@ func (e *Error) Inspect() string  { return "Error: " + e.Message }
 
 // ─── Built-in function ────────────────────────────────────────────────────────
 
-type BuiltinFn func(args ...Object) Object
+// BuiltinFn receives the calling VM so builtins can spawn, block on channels
+// with cancellation, and invoke user functions inline.
+type BuiltinFn func(vm *VM, args ...Object) Object
 
 type Builtin struct {
 	Name string
@@ -148,3 +153,46 @@ type Builtin struct {
 
 func (b *Builtin) Type() ObjectType { return BUILTIN_OBJ }
 func (b *Builtin) Inspect() string  { return "<builtin:" + b.Name + ">" }
+
+// ─── Channel ─────────────────────────────────────────────────────────────────
+
+// ChannelObj is a message-passing channel. Cap 0 is unbuffered: send rendezvous
+// with a receiver. Values sent through a channel are shared by reference.
+type ChannelObj struct {
+	Ch   chan Object
+	Cap  int
+	Name string
+}
+
+func (c *ChannelObj) Type() ObjectType { return CHANNEL_OBJ }
+func (c *ChannelObj) Inspect() string {
+	if c.Name != "" {
+		return fmt.Sprintf("<channel %s>", c.Name)
+	}
+	return "<channel>"
+}
+
+// ─── Task ─────────────────────────────────────────────────────────────────────
+
+// TaskObj is a handle to a spawned task. Done is closed when the task
+// finishes, after which Result and Err are safe to read.
+type TaskObj struct {
+	ID     int64
+	Name   string
+	Done   chan struct{}
+	Result Object
+	Err    error
+}
+
+func (t *TaskObj) Type() ObjectType { return TASK_OBJ }
+func (t *TaskObj) Inspect() string {
+	select {
+	case <-t.Done:
+		if t.Err != nil {
+			return fmt.Sprintf("<task %s failed>", t.Name)
+		}
+		return fmt.Sprintf("<task %s done>", t.Name)
+	default:
+		return fmt.Sprintf("<task %s running>", t.Name)
+	}
+}

@@ -102,6 +102,24 @@ var taskIDCounter int64
 
 func nextTaskID() int64 { return atomic.AddInt64(&taskIDCounter, 1) }
 
+// currentSpawnLoc resolves the source location of the spawn expression being
+// executed — the current frame's ip sits on the OpSpawn instruction.
+func (vm *VM) currentSpawnLoc() SourceLocation {
+	f := vm.currentFrame()
+	if f.cl != nil && f.cl.Fn != nil && len(f.cl.Fn.SourceMap) > 0 {
+		loc := LookupSourceMap(f.cl.Fn.SourceMap, f.ip)
+		if loc.Filename == "" {
+			loc.Filename = f.cl.Fn.Filename
+		}
+		return loc
+	}
+	loc := LookupSourceMap(vm.sourceMap, f.ip)
+	if loc.Filename == "" {
+		loc.Filename = vm.filename
+	}
+	return loc
+}
+
 // spawnTask starts fn(args...) on a new goroutine with its own VM state:
 // a snapshot of the globals table and a private stack/frame area. The child
 // shares the constant pool, the output collector, the input reader, and the
@@ -132,10 +150,13 @@ func (vm *VM) spawnTask(fnObj Object, args []Object) Object {
 	if name == "" {
 		name = "task"
 	}
+	// Record where the spawn happened so a failing task can point back here.
+	spawnLoc := vm.currentSpawnLoc()
 	task := &TaskObj{
-		ID:   nextTaskID(),
-		Name: name,
-		Done: make(chan struct{}),
+		ID:       nextTaskID(),
+		Name:     name,
+		Done:     make(chan struct{}),
+		SpawnLoc: spawnLoc,
 	}
 
 	child := &VM{

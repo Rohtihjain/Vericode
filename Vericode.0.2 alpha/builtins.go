@@ -478,7 +478,11 @@ func init() {
 				}
 				result := make([]Object, len(arr.Elements))
 				for i, el := range arr.Elements {
-					result[i] = callUserFn(vm, args[1], el)
+					r := callUserFn(vm, args[1], el)
+					if err, ok := r.(*Error); ok {
+						return err
+					}
+					result[i] = r
 				}
 				return &Array{Elements: result}
 			},
@@ -499,6 +503,9 @@ func init() {
 				var result []Object
 				for _, el := range arr.Elements {
 					keep := callUserFn(vm, args[1], el)
+					if err, ok := keep.(*Error); ok {
+						return err
+					}
 					if isTruthy(keep) {
 						result = append(result, el)
 					}
@@ -524,7 +531,11 @@ func init() {
 				}
 				acc := args[2]
 				for _, el := range arr.Elements {
-					acc = callUserFn(vm, args[1], acc, el)
+					r := callUserFn(vm, args[1], acc, el)
+					if err, ok := r.(*Error); ok {
+						return err
+					}
+					acc = r
 				}
 				return acc
 			},
@@ -603,7 +614,12 @@ func init() {
 				select {
 				case <-task.Done:
 					if task.Err != nil {
-						return newError("task failed: %s", task.Err.Error())
+						// Re-raise the child's failure at the await site,
+						// embedding the child's own diagnostic (its real
+						// error location and stack) below ours.
+						return newError("task failed: %s\n--- inside task '%s' (spawned at %s) ---\n%s",
+							DiagnosticHeadline(task.Err.Error()), task.Name,
+							FormatLoc(task.SpawnLoc), task.Err.Error())
 					}
 					if task.Result == nil {
 						return &Null{}

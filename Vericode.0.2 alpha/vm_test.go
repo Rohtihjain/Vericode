@@ -686,6 +686,117 @@ func TestDiagnosticBadInterpolation(t *testing.T) {
 	}
 }
 
+func TestStackTraceNestedCalls(t *testing.T) {
+	_, err := runSource(t, `
+func inner(a, b) {
+  return a / b;
+}
+func middle(a, b) {
+  return inner(a, b);
+}
+func outer(a, b) {
+  return middle(a, b);
+}
+print outer(1, 0);
+`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "Call Stack:") {
+		t.Fatalf("missing call stack: %s", msg)
+	}
+	for _, frame := range []string{"at inner", "at middle", "at outer", "at <main>"} {
+		if !strings.Contains(msg, frame) {
+			t.Errorf("missing frame %q: %s", frame, msg)
+		}
+	}
+	if strings.Index(msg, "at inner") > strings.Index(msg, "at middle") {
+		t.Errorf("innermost frame should come first: %s", msg)
+	}
+}
+
+func TestBuiltinErrorHasLocation(t *testing.T) {
+	_, err := runSource(t, `print len(5);`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "len() does not support INTEGER") {
+		t.Errorf("missing message: %s", msg)
+	}
+	if !strings.Contains(msg, "--> <input>:1:7") {
+		t.Errorf("missing location: %s", msg)
+	}
+	if !strings.Contains(msg, "print len(5);") {
+		t.Errorf("missing source line: %s", msg)
+	}
+}
+
+func TestMapCallbackErrorPropagates(t *testing.T) {
+	_, err := runSource(t, `
+func half(x) { return x / 2; }
+print map([1, "a"], half);
+`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "unsupported operation") {
+		t.Errorf("missing callback error: %s", msg)
+	}
+	if !strings.Contains(msg, "at half") {
+		t.Errorf("missing callback frame in stack: %s", msg)
+	}
+}
+
+func TestAwaitErrorCausalChain(t *testing.T) {
+	_, err := runSource(t, `
+func work() {
+  return 1 / 0;
+}
+let t = spawn work();
+let r = await t;
+`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"task failed: division by zero",
+		"inside task 'work'",
+		"spawned at <input>:5:9",
+		"--> <input>:3:12",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("missing %q: %s", want, msg)
+		}
+	}
+}
+
+func TestUnawaitedTaskNamesSpawnSite(t *testing.T) {
+	_, err := runSource(t, `
+func work() {
+  return 1 / 0;
+}
+let t = spawn work();
+print "main done";
+`)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"unawaited task 'work'",
+		"spawned at <input>:5:9",
+		"division by zero",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("missing %q: %s", want, msg)
+		}
+	}
+}
+
 func TestInterpolationWithExistingFeatures(t *testing.T) {
 	out := mustRun(t, `
 let nums = [10, 20];

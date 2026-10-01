@@ -58,7 +58,8 @@ func NewVM(bytecode *Bytecode) *VM {
 	return vm
 }
 
-// runtimeError formats a runtime error with source context when available.
+// runtimeError formats a runtime error with source context when available,
+// followed by the call stack when the error happened inside function calls.
 func (vm *VM) runtimeError(format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
 	f := vm.currentFrame()
@@ -79,9 +80,72 @@ func (vm *VM) runtimeError(format string, args ...interface{}) error {
 		filename = vm.filename
 	}
 	if loc.Line > 0 {
-		return fmt.Errorf("%s", FormatDiagnostic(filename, vm.source, "RuntimeError", msg, loc.Line, loc.Col))
+		out := FormatDiagnostic(filename, vm.source, "RuntimeError", msg, loc.Line, loc.Col)
+		if trace := vm.captureStackTrace(); trace != "" {
+			out += "\n" + trace
+		}
+		return fmt.Errorf("%s", out)
 	}
 	return fmt.Errorf("%s", msg)
+}
+
+// captureStackTrace walks the current call frames, innermost first. Each
+// frame's location comes from its own function's source map, so every line
+// of the trace points at real source. Empty when only the main frame exists.
+func (vm *VM) captureStackTrace() string {
+	if vm.frameCount <= 1 {
+		return ""
+	}
+	frames := make([]StackFrameInfo, 0, vm.frameCount)
+	for i := vm.frameCount - 1; i >= 0; i-- {
+		fr := &vm.frames[i]
+		var loc SourceLocation
+		name := "<main>"
+		if fr.cl != nil && fr.cl.Fn != nil {
+			name = fr.cl.Fn.Name
+			if name == "" {
+				name = "<anonymous>"
+			}
+			if len(fr.cl.Fn.SourceMap) > 0 {
+				loc = LookupSourceMap(fr.cl.Fn.SourceMap, fr.ip)
+			}
+			if loc.Filename == "" {
+				loc.Filename = fr.cl.Fn.Filename
+			}
+		} else {
+			loc = LookupSourceMap(vm.sourceMap, fr.ip)
+		}
+		if loc.Line < 1 {
+			continue
+		}
+		if loc.Filename == "" {
+			loc.Filename = vm.filename
+		}
+		frames = append(frames, StackFrameInfo{FnName: name, Filename: loc.Filename, Line: loc.Line, Col: loc.Col})
+	}
+	if len(frames) == 0 {
+		return ""
+	}
+	return FormatStackTrace(frames)
+}
+
+// builtinError converts a builtin's *Error result into a Go error. Bare
+// messages get the call site attached; messages that already are diagnostic
+// blocks (errors raised inside a callback, or re-raised from a failed task)
+// pass through untouched so their real location and stack stay intact.
+func (vm *VM) builtinError(e *Error) error {
+	msg := e.Message
+	if IsFormattedDiagnostic(msg) {
+		return fmt.Errorf("%s", msg)
+	}
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		// Multi-line message: a headline plus a nested diagnostic (a failed
+		// task re-raised at await). Show the headline at this call site and
+		// append the nested block below it.
+		base := vm.runtimeError("%s", msg[:i])
+		return fmt.Errorf("%s\n%s", base.Error(), msg[i+1:])
+	}
+	return vm.runtimeError("%s", msg)
 }
 
 func (vm *VM) SetInput(r io.Reader) { vm.input = r }
@@ -133,7 +197,8 @@ func (vm *VM) runAndWait() error {
 		case <-vm.parentCancel:
 		}
 		if childErr == nil && t.Err != nil {
-			childErr = t.Err
+			childErr = fmt.Errorf("unawaited task '%s' (spawned at %s) failed\n\n%s",
+				t.Name, FormatLoc(t.SpawnLoc), t.Err.Error())
 		}
 	}
 	if err != nil {
@@ -415,7 +480,7 @@ func (vm *VM) runUntilDepth(targetDepth int) error {
 					result = &Null{}
 				}
 				if errObj, ok := result.(*Error); ok {
-					return vm.runtimeError("%s", errObj.Message)
+					return vm.builtinError(errObj)
 				}
 				if err := vm.push(result); err != nil {
 					return err
@@ -495,7 +560,7 @@ func (vm *VM) runUntilDepth(targetDepth int) error {
 			vm.sp = vm.sp - numArgs - 1
 			task := vm.spawnTask(fnObj, args)
 			if err, ok := task.(*Error); ok {
-				return vm.runtimeError("%s", err.Message)
+				return vm.builtinError(err)
 			}
 			if err := vm.push(task); err != nil {
 				return err

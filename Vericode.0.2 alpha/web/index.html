@@ -788,27 +788,69 @@
         function parseProblemLocations(msg) {
             const raw = String(msg || '');
             const problems = [];
-            // Format A: [line N, col M] message
-            const reA = /\[line (\d+), col (\d+)\]\s*(.*)/g;
-            let m;
-            while ((m = reA.exec(raw)) !== null) {
-                problems.push({ line: +m[1], col: +m[2], message: m[3].trim() });
-            }
-            // Format B: --> file:line:col  (diagnostic style)
-            const reB = /-->\s*[^:\s]+:(\d+):(\d+)/g;
-            while ((m = reB.exec(raw)) !== null) {
-                // Prefer a human message from "Error [...]: msg" if present
-                const errM = raw.match(/Error \[[^\]]+\]:\s*(.+)/);
-                const message = errM ? errM[1].trim() : ('error at ' + m[1] + ':' + m[2]);
-                // Avoid duplicates if both formats appear
-                if (!problems.some(p => p.line === +m[1] && p.col === +m[2])) {
-                    problems.push({ line: +m[1], col: +m[2], message });
+            const seen = {};
+            const add = (line, col, message) => {
+                const key = line + ':' + col + ':' + message;
+                if (seen[key]) return;
+                seen[key] = true;
+                problems.push({ line: line, col: col, message: message });
+            };
+
+            // Diagnostic blocks: each starts with an "Error [...]: msg" line and
+            // owns the first "  --> file:line:col" line that follows it. Later
+            // "--> at fn (...)" lines are call-stack entries of the same error,
+            // not separate problems.
+            const lines = raw.split('\n');
+            let blockMsg = null;
+            let blockLoc = null;
+            const flush = () => {
+                if (blockMsg === null) return;
+                if (blockLoc) {
+                    add(blockLoc.line, blockLoc.col, blockMsg);
+                } else {
+                    add(0, 0, blockMsg);
+                }
+                blockMsg = null;
+                blockLoc = null;
+            };
+            let sawBlock = false;
+            for (const line of lines) {
+                const h = line.match(/^Error \[[^\]]+\]:\s*(.*)$/);
+                if (h) {
+                    flush();
+                    sawBlock = true;
+                    blockMsg = h[1].trim();
+                    continue;
+                }
+                if (blockMsg !== null && !blockLoc) {
+                    const loc = line.match(/^\s*-->\s*([^:\s]+):(\d+):(\d+)/);
+                    if (loc) blockLoc = { line: +loc[2], col: +loc[3] };
                 }
             }
+            flush();
+
+            // Legacy Format A: [line N, col M] message
+            if (!sawBlock) {
+                const reA = /\[line (\d+), col (\d+)\]\s*(.*)/g;
+                let m;
+                while ((m = reA.exec(raw)) !== null) {
+                    add(+m[1], +m[2], m[3].trim());
+                }
+            }
+
+            // Fallback: bare "-->" locations with no Error header at all
+            if (problems.length === 0) {
+                const reB = /-->\s*[^:\s]+:(\d+):(\d+)/g;
+                let m;
+                while ((m = reB.exec(raw)) !== null) {
+                    add(+m[1], +m[2], 'error at ' + m[1] + ':' + m[2]);
+                }
+            }
+
             if (problems.length === 0 && raw.trim()) {
                 // Strip ANSI color codes for display
                 const clean = raw.replace(/\x1b\[[0-9;]*m/g, '').trim();
-                problems.push({ line: 0, col: 0, message: clean });
+                add(0, 0, clean);
             }
             return problems;
         }

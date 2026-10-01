@@ -61,14 +61,48 @@ func FormatDiagnostic(filename, source, errType, msg string, line, col int) stri
 	return out.String()
 }
 
-// FormatStackTrace formats the call stack trace (plain text).
+// IsFormattedDiagnostic reports whether s is a full diagnostic block
+// (header line "Error [...]: ..." plus a "-->" location) rather than a
+// bare message.
+func IsFormattedDiagnostic(s string) bool {
+	return strings.HasPrefix(s, "Error [") && strings.Contains(s, "\n  --> ")
+}
+
+// DiagnosticHeadline returns the message from a diagnostic's first line,
+// with the "Error [Type]: " prefix stripped. For bare messages it returns
+// the input unchanged.
+func DiagnosticHeadline(s string) string {
+	first := s
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		first = s[:i]
+	}
+	if i := strings.Index(first, "]: "); i >= 0 {
+		return first[i+3:]
+	}
+	return first
+}
+
+// FormatLoc renders a source location as "file:line:col" for inline mentions.
+func FormatLoc(loc SourceLocation) string {
+	name := loc.Filename
+	if name == "" {
+		name = "<input>"
+	}
+	if loc.Line < 1 {
+		return name
+	}
+	return fmt.Sprintf("%s:%d:%d", name, loc.Line, loc.Col)
+}
+
+// FormatStackTrace formats the call stack trace (plain text). Frames are
+// given innermost-first; they print in that order so the error site leads.
 func FormatStackTrace(frames []StackFrameInfo) string {
 	if len(frames) == 0 {
 		return ""
 	}
 	var out strings.Builder
 	out.WriteString("Call Stack:\n")
-	for i := len(frames) - 1; i >= 0; i-- {
+	for i := 0; i < len(frames); i++ {
 		f := frames[i]
 		fnName := f.FnName
 		if fnName == "" {

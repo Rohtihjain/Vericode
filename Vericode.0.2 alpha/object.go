@@ -175,13 +175,15 @@ func (c *ChannelObj) Inspect() string {
 // ─── Task ─────────────────────────────────────────────────────────────────────
 
 // TaskObj is a handle to a spawned task. Done is closed when the task
-// finishes, after which Result and Err are safe to read.
+// finishes, after which Result and Err are safe to read. SpawnLoc records
+// where the task was spawned, used when re-raising its failure.
 type TaskObj struct {
-	ID     int64
-	Name   string
-	Done   chan struct{}
-	Result Object
-	Err    error
+	ID       int64
+	Name     string
+	Done     chan struct{}
+	Result   Object
+	Err      error
+	SpawnLoc SourceLocation
 }
 
 func (t *TaskObj) Type() ObjectType { return TASK_OBJ }

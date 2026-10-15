@@ -655,6 +655,115 @@ func init() {
 				}
 			},
 		},
+		// ─── Parallelism (0.3) ──────────────────────────────────────────────
+		&Builtin{
+			Name: "pmap",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) < 2 || len(args) > 3 {
+					return newError("pmap() takes 2-3 arguments (array, func, [workers]), got %d", len(args))
+				}
+				arr, ok := args[0].(*Array)
+				if !ok {
+					return newError("pmap() first argument must be an array, got %s", args[0].Type())
+				}
+				arity, cbOK := callbackArity(args[1])
+				if !cbOK {
+					return newError("pmap() second argument must be a function, got %s", args[1].Type())
+				}
+				if arity > 1 {
+					return newError("pmap() callback must take 1 argument, got %d", arity)
+				}
+				w, errObj := poolWorkerCount(args[2:])
+				if errObj != nil {
+					return errObj
+				}
+				res, err := vm.parallelRun(len(arr.Elements),
+					func(i int) Object { return arr.Elements[i] }, args[1], w, false)
+				if err != nil {
+					return wrapPoolError("pmap", err)
+				}
+				return &Array{Elements: res.values}
+			},
+		},
+		&Builtin{
+			Name: "pfilter",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) < 2 || len(args) > 3 {
+					return newError("pfilter() takes 2-3 arguments (array, func, [workers]), got %d", len(args))
+				}
+				arr, ok := args[0].(*Array)
+				if !ok {
+					return newError("pfilter() first argument must be an array, got %s", args[0].Type())
+				}
+				arity, cbOK := callbackArity(args[1])
+				if !cbOK {
+					return newError("pfilter() second argument must be a function, got %s", args[1].Type())
+				}
+				if arity > 1 {
+					return newError("pfilter() callback must take 1 argument, got %d", arity)
+				}
+				w, errObj := poolWorkerCount(args[2:])
+				if errObj != nil {
+					return errObj
+				}
+				res, err := vm.parallelRun(len(arr.Elements),
+					func(i int) Object { return arr.Elements[i] }, args[1], w, true)
+				if err != nil {
+					return wrapPoolError("pfilter", err)
+				}
+				out := make([]Object, 0, len(arr.Elements))
+				for i, el := range arr.Elements {
+					if res.keeps[i] {
+						out = append(out, el)
+					}
+				}
+				return &Array{Elements: out}
+			},
+		},
+		&Builtin{
+			Name: "pfor",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) < 3 || len(args) > 4 {
+					return newError("pfor() takes 3-4 arguments (start, end, func, [workers]), got %d", len(args))
+				}
+				start, ok1 := args[0].(*Integer)
+				end, ok2 := args[1].(*Integer)
+				if !ok1 || !ok2 {
+					return newError("pfor() start and end must be integers; for arrays use pmap()")
+				}
+				arity, cbOK := callbackArity(args[2])
+				if !cbOK {
+					return newError("pfor() third argument must be a function, got %s", args[2].Type())
+				}
+				if arity > 1 {
+					return newError("pfor() callback must take 1 argument, got %d", arity)
+				}
+				w, errObj := poolWorkerCount(args[3:])
+				if errObj != nil {
+					return errObj
+				}
+				n := end.Value - start.Value
+				if n <= 0 {
+					return &Array{Elements: []Object{}}
+				}
+				res, err := vm.parallelRun(int(n),
+					func(i int) Object { return &Integer{Value: start.Value + int64(i)} },
+					args[2], w, false)
+				if err != nil {
+					return wrapPoolError("pfor", err)
+				}
+				return &Array{Elements: res.values}
+			},
+		},
+		&Builtin{
+			Name: "workers",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) != 0 {
+					return newError("workers() takes 0 arguments, got %d", len(args))
+				}
+				return &Integer{Value: numWorkers()}
+			},
+		},
 	)
 
 	builtinIndex = make(map[string]int, len(Builtins))

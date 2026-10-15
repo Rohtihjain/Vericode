@@ -167,6 +167,7 @@
                 <option value="collections">Collections</option>
                 <option value="functional">Functional</option>
                 <option value="concurrency">Concurrency</option>
+                <option value="parallel">Parallel</option>
                 <option value="types">Floats &amp; Null</option>
                 <option value="kitchen">Kitchen Sink</option>
             </select>
@@ -422,6 +423,37 @@
                     'print "19 + 23 = " + str(await t);',
                 ].join('\n')
             },
+            parallel: {
+                hint: 'pmap / pfilter / pfor run work on a pool of worker VMs. Results keep input order.',
+                code: [
+                    '// Parallel collection ops run your callback on a pool',
+                    '// of isolated worker VMs. Order is always preserved.',
+                    'let nums = range(1, 11);',
+                    '',
+                    '// parallel map',
+                    'let squares = pmap(nums, func(x) { return x * x; });',
+                    'print squares;',
+                    '',
+                    '// parallel filter — order preserved here too',
+                    'let evens = pfilter(nums, func(x) { return x % 2 == 0; });',
+                    'print evens;',
+                    '',
+                    '// CPU-bound parallel loop over an index range.',
+                    '// pfor(start, end, fn) calls fn(i) for i in start..end-1',
+                    '// and returns the results in index order.',
+                    'func fib(n) {',
+                    '    if n < 2 { return n; }',
+                    '    return fib(n - 1) + fib(n - 2);',
+                    '}',
+                    'let fibs = pfor(0, 22, func(i) { return fib(i); });',
+                    'print fibs;',
+                    '',
+                    '// Pool size defaults to one worker per CPU;',
+                    '// pass an explicit count to override it.',
+                    'print "CPUs: " + str(workers());',
+                    'print pmap(nums, func(x) { return x * 100; }, 2);',
+                ].join('\n')
+            },
             types: {
                 hint: 'Floats, null, interpolation, format, and math/string helpers.',
                 code: [
@@ -554,7 +586,8 @@
                     'map', 'filter', 'reduce',
                     'abs', 'min', 'max', 'sqrt', 'pow',
                     'split', 'join', 'trim', 'contains', 'replace', 'format',
-                    'chan', 'send', 'recv', 'sleep'
+                    'chan', 'send', 'recv', 'sleep',
+                    'pmap', 'pfilter', 'pfor', 'workers'
                 ],
                 tokenizer: {
                     root: [

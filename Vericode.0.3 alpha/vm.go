@@ -189,6 +189,17 @@ func (vm *VM) runAndWait() error {
 	if err != nil {
 		vm.kill()
 	}
+	childErr := vm.waitTasks()
+	if err != nil {
+		return err
+	}
+	return childErr
+}
+
+// waitTasks waits for this VM's spawned tasks and returns the first
+// unawaited-task failure. Worker VMs in the parallel pool use it when their
+// callbacks spawn tasks.
+func (vm *VM) waitTasks() error {
 	var childErr error
 	for _, t := range vm.tasks {
 		select {
@@ -200,9 +211,6 @@ func (vm *VM) runAndWait() error {
 			childErr = fmt.Errorf("unawaited task '%s' (spawned at %s) failed\n\n%s",
 				t.Name, FormatLoc(t.SpawnLoc), t.Err.Error())
 		}
-	}
-	if err != nil {
-		return err
 	}
 	return childErr
 }
@@ -938,9 +946,17 @@ func (vm *VM) CallFn(fnObj Object, args ...Object) (Object, error) {
 		vm.sp = bp + fn.Fn.NumLocals
 		if err := vm.runUntilDepth(startDepth); err != nil {
 			vm.sp = savedSP
+			// The failed call may have left frames pushed; pop them so the
+			// VM (and any error reporting afterwards) is back to this depth.
+			vm.frameCount = startDepth
 			return nil, err
 		}
-		result := vm.lastPopped
+		// The return value (or implicit null) sits exactly at savedSP. Read
+		// it from the stack instead of lastPopped — lastPopped is not updated
+		// by implicit returns, and dropping the slot keeps repeated CallFn
+		// calls (map, pmap) from leaking one stack slot per call.
+		result := vm.stack[vm.sp-1]
+		vm.sp = savedSP
 		if result == nil {
 			result = &Null{}
 		}

@@ -1,0 +1,46 @@
+// VeriCode 0.3 — parallelism.
+//
+// pmap, pfilter, and pfor run your callback on a pool of worker VMs:
+// each worker is isolated like a spawned task (globals snapshot), work is
+// pulled from a shared counter, and results always keep input order.
+
+let nums = range(1, 11);
+
+// Parallel map. Same contract as map(), but the work is spread across
+// the pool.
+let squares = pmap(nums, func(x) { return x * x; });
+print squares;
+
+// Parallel filter keeps order too.
+let evens = pfilter(nums, func(x) { return x % 2 == 0; });
+print evens;
+
+// A CPU-bound loop: pfor(start, end, fn) calls fn(i) for every i in
+// start..end-1, in parallel, and returns the results in index order.
+// This avoids building the input array that pmap(range(...), fn) would.
+func fib(n) {
+  if n < 2 { return n; }
+  return fib(n - 1) + fib(n - 2);
+}
+
+let fibs = pfor(0, 26, func(i) { return fib(i); });
+print fibs;
+
+// The pool size defaults to one worker per CPU; pass a count to choose
+// your own. workers() reports the default.
+print "CPUs: " + str(workers());
+print pmap(nums, func(x) { return x * 100; }, 2);
+
+// Workers are isolated: global changes inside a callback stay in that
+// worker's snapshot, like spawn. Channels are the shared path out.
+let ch = chan(50);
+pfor(0, 50, func(i) { send(ch, i); });
+let total = 0;
+loop 50 times {
+  total += recv(ch);
+}
+print "sum of 0..49 = " + str(total);
+
+// Printing from workers goes to the shared console; the order is
+// scheduling order and can differ between runs.
+pfor(0, 5, func(i) { print "worker computed " + str(i); }, 3);

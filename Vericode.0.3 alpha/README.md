@@ -1,6 +1,6 @@
 # VeriCode
 
-**0.2 alpha** — a small, evolving programming language written in Go.
+**0.3 alpha** — a small, evolving programming language written in Go.
 
 VeriCode starts as a clear, approachable language for learning and scripting. The long-term aim is to make **concurrency, parallelism, and data-oriented work** first-class and practical — so programs can grow from simple scripts into concurrent and data-heavy workloads without drowning in boilerplate.
 
@@ -21,15 +21,17 @@ Many languages support concurrency and large-scale data processing, but they oft
 
 **0.1** was the foundation: a solid sequential language and tooling.
 
-**0.2** adds the first concurrent layer: lightweight tasks, channels, and a clear spawn/await model.
+**0.2** added the first concurrent layer: lightweight tasks, channels, and a clear spawn/await model — plus source-located error messages with call stacks.
 
-**Later phases** add the parallel and data layers on top of that foundation.
+**0.3** adds the parallel layer: `pmap`, `pfilter`, and `pfor` run callbacks on a pool of isolated worker VMs, with order-preserving results.
+
+**Later phases** add the data layer on top of that foundation.
 
 \---
 
-## Current status (0.2 alpha)
+## Current status (0.3 alpha)
 
-Usable for demos, learning, sequential scripts, and cooperative concurrency. **Not** production-hardened. Parallelism and big-data features are **planned**, not shipped yet.
+Usable for demos, learning, sequential scripts, cooperative concurrency, and parallel collection work. **Not** production-hardened. Big-data features are **planned**, not shipped yet.
 
 ### What works today
 
@@ -43,6 +45,7 @@ Usable for demos, learning, sequential scripts, and cooperative concurrency. **N
 |**Collections**|arrays and hashes, index read/write, slicing (`arr\\\[1:3]`, `str\\\[:2]`)|
 |**Stdlib**|`len`, `push` / `pop`, `map` / `filter` / `reduce`, `range`, math (`abs`, `min`, `max`, `sqrt`, `pow`), string (`split`, `join`, `trim`, `contains`, `replace`, `format`)|
 |**Concurrency**|`spawn` tasks, `await` join, channels (`chan` / `send` / `recv`), `sleep`, snapshot-isolated task state|
+|**Parallelism**|`pmap` / `pfilter` / `pfor` on a worker pool (size via optional arg or `workers()`), order-preserving results, callback errors with full source context|
 |**Tooling**|CLI runner, web IDE (Monaco), source-aware error messages|
 
 \---
@@ -52,8 +55,8 @@ Usable for demos, learning, sequential scripts, and cooperative concurrency. **N
 |Phase|Theme|Direction|
 |-|-|-|
 |**0.1**|Core language|Types, functions, slices, stdlib, CLI and web IDE|
-|**0.2** (now)|Concurrency|Lightweight tasks, message passing / channels, clear spawn and join model|
-|**0.3**|Parallelism|Parallel collection ops, worker pools, CPU-bound parallel loops|
+|**0.2**|Concurrency|Lightweight tasks, message passing / channels, clear spawn and join model|
+|**0.3** (now)|Parallelism|Parallel collection ops, worker pools, CPU-bound parallel loops|
 |**0.4**|Data-oriented|Pipelines, batch transforms, practical I/O (CSV/JSON), table-like structures|
 |**Later**|Scale and polish|Richer runtime, optional native hooks, tooling — only as the core stays solid|
 
@@ -187,6 +190,33 @@ VeriCode's concurrency is **share-nothing with explicit sharing**:
 * Tasks are **not** killed mid-computation — cancellation is checked only at `send` / `recv` / `await` / `sleep`.
 * Concurrency is designed to be data-race free (snapshot isolation + shared-nothing VMs), but run `go test -race ./...` on a machine with a C compiler to verify on other platforms.
 
+\---
+
+## Parallelism (0.3)
+
+Parallel collection operations run your callback on a **pool of worker VMs** — the same snapshot-isolated, share-nothing design as `spawn`, but structured: the pool waits for all workers before returning, so results can never outlive the call.
+
+* **`pmap(arr, fn, [workers])`** maps in parallel; **`pfilter(arr, fn, [workers])`** filters in parallel. Results always keep the input order, whatever the scheduling.
+* **`pfor(start, end, fn, [workers])`** runs `fn(i)` for every `i` in `start..end-1` in parallel and returns the results in index order — for CPU-bound loops it skips building the input array that `pmap(range(...), fn)` would.
+* **Worker pool** — workers pull indices from a shared counter, so slow elements don't strand a worker. The pool size defaults to `workers()` (one per CPU) and can be set per call (capped at 64).
+* **Isolation** — each worker runs on its own snapshot of the variables, like a spawned task. Callbacks can `print` (shared console) and use channels, but cannot mutate the caller's state. There are no data races by construction.
+* **Errors carry the full causal chain** — a failing callback aborts the pool and reports the call site, the worker's own source location, and its call stack. A blocked callback wakes immediately on cancellation, including when an ancestor task fails.
+* Nested parallelism works: a `pmap` callback may itself run `pmap` / `pfilter` / `pfor`.
+
+```veri
+func fib(n) {
+  if n < 2 { return n; }
+  return fib(n - 1) + fib(n - 2);
+}
+
+// CPU-bound loop spread across all cores, results in index order
+let fibs = pfor(0, 26, func(i) { return fib(i); });
+print fibs;
+
+// Two-worker pool, order preserved
+print pmap([1, 2, 3], func(x) { return x * 10; }, 2);
+```
+
 ## Project layout
 
 ```
@@ -200,10 +230,12 @@ VeriCode's concurrency is **share-nothing with explicit sharing**:
 ├── lexer.go         # Tokenizer
 ├── main.go          # CLI and embedded web server
 ├── object.go        # Runtime values
+├── parallel.go      # Worker pool, pmap / pfilter / pfor
 ├── parser.go        # Pratt parser
 ├── token.go         # Token types and keywords
 ├── vm.go            # Bytecode interpreter
 ├── vm\\\_test.go       # Tests
+├── parallel\\\_test.go # Parallel-op tests
 ├── examples/        # Sample .veri programs
 └── web/
     └── index.html   # VeriCode Studio (Monaco)
@@ -240,7 +272,7 @@ Programs run on the server via `POST /api/run`.
 
 \---
 
-## Language sketch (0.2)
+## Language sketch (0.3)
 
 ```veri
 let x = 10;
@@ -277,13 +309,20 @@ let t = spawn func() {
 }();
 print recv(ch);
 print await t;
+
+// parallelism — order-preserving results on a worker pool
+let squares = pmap(range(1, 6), func(n) { return n * n; });
+print squares;              // \\\[1, 4, 9, 16, 25]
+
+let fibs = pfor(0, 10, func(i) { return i * 2; }, 4);
+print fibs;                 // \\\[0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
 ```
 
 \---
 
 ## Contributing
 
-Ideas, issues, and pull requests are welcome — especially for the sequential core and concurrency model (bugs, tests, examples) and early design discussion for **0.3 parallelism**.
+Ideas, issues, and pull requests are welcome — especially for the sequential core, concurrency, and parallel model (bugs, tests, examples) and early design discussion for **0.4 data-oriented work**.
 
 Before proposing large features, open an issue so the design can stay consistent with the roadmap.
 

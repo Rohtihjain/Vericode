@@ -476,7 +476,7 @@ Before proposing large features, open an issue so the design can stay consistent
 
 ## License
 
-Add a license file before publishing (for example MIT). Until then, all rights reserved by the author.
+MIT. See the `LICENSE` file at the repository root.
 
 ---
 

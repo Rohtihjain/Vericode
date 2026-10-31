@@ -39,6 +39,8 @@ type VM struct {
 	killOnce     *sync.Once
 	tasks        []*TaskObj // tasks spawned by this VM (direct children)
 	allowIO      bool       // read_file/write_file; enabled for the CLI only
+	detector     *deadlockDetector
+	vmID         int64
 }
 
 func NewVM(bytecode *Bytecode) *VM {
@@ -53,9 +55,12 @@ func NewVM(bytecode *Bytecode) *VM {
 		filename:  bytecode.Filename,
 		cancel:    make(chan struct{}),
 		killOnce:  &sync.Once{},
+		detector:  newDeadlockDetector(),
+		vmID:      nextVMID(),
 	}
 	vm.frames[0] = frame{ip: -1, instructions: bytecode.Instructions}
 	vm.frameCount = 1
+	vm.detector.enter(vm.vmID, "main")
 	return vm
 }
 
@@ -206,6 +211,10 @@ func (vm *VM) runAndWait() error {
 // callbacks spawn tasks.
 func (vm *VM) waitTasks() error {
 	var childErr error
+	if len(vm.tasks) > 0 {
+		endWait := vm.beginWait("spawned tasks to finish")
+		defer endWait()
+	}
 	for _, t := range vm.tasks {
 		select {
 		case <-t.Done:
@@ -223,6 +232,9 @@ func (vm *VM) waitTasks() error {
 // Run executes the program until all frames are exhausted, waits for all
 // spawned tasks, and shuts down the cancellation channel.
 func (vm *VM) Run() error {
+	if vm.detector != nil {
+		defer vm.detector.leave(vm.vmID)
+	}
 	err := vm.runAndWait()
 	vm.kill()
 	return err

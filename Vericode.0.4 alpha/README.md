@@ -46,7 +46,7 @@ Usable for demos, learning, sequential scripts, cooperative concurrency, paralle
 |**Strings**|escapes, `${expr}` interpolation, `format("{}", ...)`|
 |**Collections**|arrays and hashes, index read/write, slicing (`arr[1:3]`, `str[:2]`), batch transforms|
 |**Stdlib**|`len`, `push` / `pop`, `map` / `filter` / `reduce`, `range`, math (`abs`, `min`, `max`, `sqrt`, `pow`), string (`split`, `join`, `trim`, `contains`, `replace`, `format`)|
-|**Concurrency**|`spawn` tasks, `await` join, channels (`chan` / `send` / `recv`), `sleep`, snapshot-isolated task state|
+|**Concurrency**|`spawn` tasks, `await` join, channels (`chan` / `send` / `recv`), `sleep`, snapshot-isolated task state, deadlock detection|
 |**Parallelism**|`pmap` / `pfilter` / `pfor` on a worker pool (size via optional arg or `workers()`), order-preserving results, callback errors with full source context|
 |**Data**|pipelines with `|>`, `take` / `drop` / `chunk` / `zip` / `uniq` / `group_by` / `sort_by` and friends, tables (`table`, `tselect`, `twhere`, `tsort`, `tgroup`)|
 |**I/O**|`csv_parse` / `csv_table` / `csv_write`, `json_parse` / `json_write`, and `read_file` / `write_file` in CLI runs only|
@@ -186,11 +186,12 @@ VeriCode's concurrency is **share-nothing with explicit sharing**:
 * **Errors surface even if you forget to join** — an unawaited task's failure ends the run with that error.
 * **Cancellation is tree-shaped.** If the main program fails, it cancels every task it spawned (and they cancel theirs). Blocked `send` / `recv` / `await` / `sleep` wake immediately with a cancellation error instead of leaking goroutines.
 * **`sleep(ms)`** pauses only the current task.
+* **Deadlocks are detected.** When every task is blocked in an untimed wait — `send`, `recv`, `await`, or a pool join — and no `sleep` timer is pending, the run stops with a source-located `deadlock` error that lists who is waiting on what. No more Go `fatal error` in the CLI or a hung request in the web IDE.
 * Print output from all tasks is collected on one shared, mutex-guarded stream — line order is scheduling order and intentionally unspecified.
 
 ### Known limitations
 
-* **True deadlocks are not detected.** If every task blocks forever (e.g. awaiting producers while their sends fill a buffer nobody drains), the CLI aborts with Go's runtime `fatal error: all goroutines are asleep - deadlock!`, and in the web IDE the run request hangs until the browser gives up. Design programs so some task is always receiving.
+* **Detection covers VeriCode-level waits only.** A task blocked in external I/O (stdin via `ask`, file reads) is not considered deadlocked, because that input may still arrive.
 * Tasks are **not** killed mid-computation — cancellation is checked only at `send` / `recv` / `await` / `sleep`.
 * Concurrency is designed to be data-race free (snapshot isolation + shared-nothing VMs), but run `go test -race ./...` on a machine with a C compiler to verify on other platforms.
 
@@ -353,6 +354,7 @@ write_file("totals.csv", csv_write(scores));
 ├── compiler.go      # AST to bytecode (with source maps)
 ├── concurrency.go   # Task spawning, snapshot isolation, shared output
 ├── data.go          # Pipelines and batch transforms
+├── deadlock.go      # Deadlock detection for blocked tasks
 ├── diagnostic.go    # Error formatting
 ├── lexer.go         # Tokenizer
 ├── main.go          # CLI and embedded web server
@@ -365,6 +367,7 @@ write_file("totals.csv", csv_write(scores));
 ├── vm_test.go       # Core language and error-reporting tests
 ├── parallel_test.go # Parallel-op tests
 ├── data_test.go     # Pipeline and transform tests
+├── deadlock_test.go # Deadlock detection tests
 ├── table_test.go    # Table tests
 ├── codec_test.go    # CSV, JSON, and file I/O tests
 ├── examples/        # Sample .veri programs

@@ -600,6 +600,8 @@ func init() {
 				if !ok {
 					return newError("send() first argument must be a channel, got %s", args[0].Type())
 				}
+				endWait := vm.beginWait("send()")
+				defer endWait()
 				select {
 				case ch.Ch <- args[1]:
 					return &Null{}
@@ -607,6 +609,8 @@ func init() {
 					return newError("task cancelled")
 				case <-vm.parentCancel:
 					return newError("task cancelled")
+				case <-vm.deadlockChan():
+					return vm.deadlockErr()
 				}
 			},
 		},
@@ -620,6 +624,8 @@ func init() {
 				if !ok {
 					return newError("recv() first argument must be a channel, got %s", args[0].Type())
 				}
+				endWait := vm.beginWait("recv()")
+				defer endWait()
 				select {
 				case v := <-ch.Ch:
 					return v
@@ -627,6 +633,8 @@ func init() {
 					return newError("task cancelled")
 				case <-vm.parentCancel:
 					return newError("task cancelled")
+				case <-vm.deadlockChan():
+					return vm.deadlockErr()
 				}
 			},
 		},
@@ -640,6 +648,8 @@ func init() {
 				if !ok {
 					return newError("await() argument must be a task, got %s", args[0].Type())
 				}
+				endWait := vm.beginWait("await()")
+				defer endWait()
 				select {
 				case <-task.Done:
 					if task.Err != nil {
@@ -658,6 +668,8 @@ func init() {
 					return newError("task cancelled")
 				case <-vm.parentCancel:
 					return newError("task cancelled")
+				case <-vm.deadlockChan():
+					return vm.deadlockErr()
 				}
 			},
 		},
@@ -672,6 +684,10 @@ func init() {
 					return newError("sleep() argument must be an integer (milliseconds), got %s", args[0].Type())
 				}
 				timer := time.NewTimer(time.Duration(ms.Value) * time.Millisecond)
+				endTimer := vm.beginTimer()
+				defer endTimer()
+				endWait := vm.beginWait("sleep()")
+				defer endWait()
 				select {
 				case <-timer.C:
 					return &Null{}
@@ -681,6 +697,9 @@ func init() {
 				case <-vm.parentCancel:
 					timer.Stop()
 					return newError("task cancelled")
+				case <-vm.deadlockChan():
+					timer.Stop()
+					return vm.deadlockErr()
 				}
 			},
 		},

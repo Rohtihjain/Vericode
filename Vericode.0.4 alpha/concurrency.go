@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 )
@@ -183,6 +184,8 @@ func (vm *VM) spawnTask(fnObj Object, args []Object) Object {
 		source:       vm.source,
 		filename:     vm.filename,
 		allowIO:      vm.allowIO,
+		detector:     vm.detector,
+		vmID:         nextVMID(),
 	}
 	child.frames[0] = frame{
 		ip:           -1,
@@ -201,8 +204,14 @@ func (vm *VM) spawnTask(fnObj Object, args []Object) Object {
 
 	vm.tasks = append(vm.tasks, task)
 
+	if vm.detector != nil {
+		vm.detector.enter(child.vmID, fmt.Sprintf("task '%s' (spawned at %s)", name, FormatLoc(spawnLoc)))
+	}
 	go func() {
 		defer close(task.Done)
+		if vm.detector != nil {
+			defer vm.detector.leave(child.vmID)
+		}
 		err := child.runAndWait()
 		if err != nil {
 			task.Err = err

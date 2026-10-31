@@ -85,6 +85,8 @@ func (vm *VM) newWorkerVM(abort chan struct{}) *VM {
 		source:       vm.source,
 		filename:     vm.filename,
 		allowIO:      vm.allowIO,
+		detector:     vm.detector,
+		vmID:         nextVMID(),
 	}
 	child.frames[0] = frame{ip: -1}
 	child.frameCount = 1
@@ -155,9 +157,13 @@ func (vm *VM) parallelRun(n int, get func(int) Object, fnObj Object, workers int
 
 	for k := 0; k < w; k++ {
 		wg.Add(1)
-		go func() {
+		go func(k int) {
 			defer wg.Done()
 			child := vm.newWorkerVM(abort)
+			if vm.detector != nil {
+				vm.detector.enter(child.vmID, fmt.Sprintf("parallel worker %d", k+1))
+				defer vm.detector.leave(child.vmID)
+			}
 			cb := snapshotCallback(fnObj)
 			for {
 				select {
@@ -199,7 +205,7 @@ func (vm *VM) parallelRun(n int, get func(int) Object, fnObj Object, workers int
 					res.values[i] = out
 				}
 			}
-		}()
+		}(k)
 	}
 
 	done := make(chan struct{})
@@ -208,6 +214,7 @@ func (vm *VM) parallelRun(n int, get func(int) Object, fnObj Object, workers int
 		close(done)
 	}()
 
+	endWait := vm.beginWait("parallel workers")
 	select {
 	case <-done:
 	case <-vm.cancel:
@@ -217,6 +224,7 @@ func (vm *VM) parallelRun(n int, get func(int) Object, fnObj Object, workers int
 		closeAbort.Do(func() { close(abort) })
 		<-done
 	}
+	endWait()
 
 	mu.Lock()
 	err := firstErr

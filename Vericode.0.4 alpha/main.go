@@ -53,7 +53,7 @@ type CodeResponse struct {
 	Errors string `json:"errors,omitempty"`
 }
 
-func runCode(code string) (string, string) {
+func runCode(code string, allowIO bool) (string, string) {
 	// Lex
 	lexer := NewLexer(code)
 	parser := NewParser(lexer)
@@ -69,8 +69,10 @@ func runCode(code string) (string, string) {
 		return "", err.Error()
 	}
 
-	// Execute
+	// Execute. The web IDE disables file access (allowIO=false); the CLI
+	// enables it for scripts that read or write CSV/JSON files.
 	vm := NewVM(compiler.Bytecode())
+	vm.SetAllowIO(allowIO)
 	if err := vm.Run(); err != nil {
 		return "", err.Error()
 	}
@@ -105,7 +107,7 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	// Strip non-breaking spaces that Monaco can insert
 	code := strings.ReplaceAll(req.Code, "\u00A0", " ")
 
-	output, errMsg := runCode(code)
+	output, errMsg := runCode(code, false)
 	if errMsg != "" {
 		json.NewEncoder(w).Encode(CodeResponse{Errors: errMsg})
 		return
@@ -128,7 +130,7 @@ func main() {
 		// Strip UTF-8 BOM if present
 		code := string(src)
 		code = strings.TrimPrefix(code, "\xef\xbb\xbf")
-		output, errMsg := runCode(code)
+		output, errMsg := runCode(code, true)
 		if errMsg != "" {
 			fmt.Fprintln(os.Stderr, errMsg)
 			os.Exit(1)
@@ -152,8 +154,8 @@ func main() {
 		}
 
 	default:
-		fmt.Println("VeriCode 0.2 alpha")
-		fmt.Println("  veri -run <file.veri>   run a source file")
-		fmt.Println("  veri -web               start the web IDE on :8080")
+		fmt.Println("VeriCode 0.4 alpha")
+		fmt.Println("  veri -run <file.veri>   run a source file (file I/O enabled)")
+		fmt.Println("  veri -web               start the web IDE on :8080 (file I/O disabled)")
 	}
 }

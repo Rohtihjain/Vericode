@@ -89,6 +89,17 @@ func snapshotObject(o Object, seen map[Object]Object) Object {
 			cp.Free[i] = snapshotObject(e, seen)
 		}
 		return cp
+	case *Table:
+		if prev, ok := seen[o]; ok {
+			return prev
+		}
+		cp := &Table{Headers: make([]string, len(v.Headers)), Rows: make([]*Hash, len(v.Rows))}
+		copy(cp.Headers, v.Headers)
+		seen[o] = cp
+		for i, row := range v.Rows {
+			cp.Rows[i] = snapshotObject(row, seen).(*Hash)
+		}
+		return cp
 	default:
 		// Integer, Float, BooleanObj, String, Null, Error are immutable.
 		// ChannelObj, TaskObj, Builtin, CompiledFunction are shared by design.
@@ -171,6 +182,7 @@ func (vm *VM) spawnTask(fnObj Object, args []Object) Object {
 		sourceMap:    vm.sourceMap,
 		source:       vm.source,
 		filename:     vm.filename,
+		allowIO:      vm.allowIO,
 	}
 	child.frames[0] = frame{
 		ip:           -1,

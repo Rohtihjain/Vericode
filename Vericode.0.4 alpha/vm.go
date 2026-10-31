@@ -38,6 +38,7 @@ type VM struct {
 	parentCancel <-chan struct{} // fires when an ancestor VM is cancelled (nil for the root VM)
 	killOnce     *sync.Once
 	tasks        []*TaskObj // tasks spawned by this VM (direct children)
+	allowIO      bool       // read_file/write_file; enabled for the CLI only
 }
 
 func NewVM(bytecode *Bytecode) *VM {
@@ -149,6 +150,10 @@ func (vm *VM) builtinError(e *Error) error {
 }
 
 func (vm *VM) SetInput(r io.Reader) { vm.input = r }
+
+// SetAllowIO enables read_file/write_file. The CLI turns this on; the web
+// IDE leaves it off so posted code cannot touch the host filesystem.
+func (vm *VM) SetAllowIO(allow bool) { vm.allowIO = allow }
 
 func (vm *VM) currentFrame() *frame  { return &vm.frames[vm.frameCount-1] }
 func (vm *VM) pushFrame(f frame)     { vm.frames[vm.frameCount] = f; vm.frameCount++ }
@@ -649,6 +654,22 @@ func (vm *VM) executeIndex(left, index Object) error {
 			return vm.push(&Null{})
 		}
 		return vm.push(&String{Value: string(str[idx])})
+
+	case left.Type() == TABLE_OBJ && index.Type() == INTEGER_OBJ:
+		table := left.(*Table)
+		idx := index.(*Integer).Value
+		if idx < 0 || idx >= int64(len(table.Rows)) {
+			return vm.push(&Null{})
+		}
+		return vm.push(table.Rows[idx])
+
+	case left.Type() == TABLE_OBJ && index.Type() == STRING_OBJ:
+		table := left.(*Table)
+		name := index.(*String).Value
+		if table.columnIndex(name) < 0 {
+			return vm.push(&Null{})
+		}
+		return vm.push(&Array{Elements: table.column(name)})
 
 	default:
 		return vm.runtimeError("index operator not supported for %s[%s]", left.Type(), index.Type())

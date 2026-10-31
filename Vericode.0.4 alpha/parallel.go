@@ -84,6 +84,7 @@ func (vm *VM) newWorkerVM(abort chan struct{}) *VM {
 		sourceMap:    vm.sourceMap,
 		source:       vm.source,
 		filename:     vm.filename,
+		allowIO:      vm.allowIO,
 	}
 	child.frames[0] = frame{ip: -1}
 	child.frameCount = 1

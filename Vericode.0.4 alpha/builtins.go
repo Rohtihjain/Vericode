@@ -23,6 +23,8 @@ var Builtins = []*Builtin{
 				return &Integer{Value: int64(len(arg.Value))}
 			case *Array:
 				return &Integer{Value: int64(len(arg.Elements))}
+			case *Table:
+				return &Integer{Value: int64(len(arg.Rows))}
 			default:
 				return newError("len() does not support %s", arg.Type())
 			}
@@ -219,6 +221,13 @@ var Builtins = []*Builtin{
 			if len(args) != 2 {
 				return newError("has() takes 2 arguments, got %d", len(args))
 			}
+			if table, ok := args[0].(*Table); ok {
+				name, ok := args[1].(*String)
+				if !ok {
+					return newError("has() second argument must be a string for tables, got %s", args[1].Type())
+				}
+				return &BooleanObj{Value: table.columnIndex(name.Value) >= 0}
+			}
 			hash, ok := args[0].(*Hash)
 			if !ok {
 				return newError("has() first argument must be a hash, got %s", args[0].Type())
@@ -307,6 +316,12 @@ var Builtins = []*Builtin{
 			if len(args) < 1 {
 				return newError("min() takes at least 1 argument, got %d", len(args))
 			}
+			if arr, ok := args[0].(*Array); ok && len(args) == 1 {
+				if len(arr.Elements) == 0 {
+					return newError("min() of an empty array")
+				}
+				return minMax(arr.Elements, true)
+			}
 			return minMax(args, true)
 		},
 	},
@@ -315,6 +330,12 @@ var Builtins = []*Builtin{
 		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) < 1 {
 				return newError("max() takes at least 1 argument, got %d", len(args))
+			}
+			if arr, ok := args[0].(*Array); ok && len(args) == 1 {
+				if len(arr.Elements) == 0 {
+					return newError("max() of an empty array")
+				}
+				return minMax(arr.Elements, false)
 			}
 			return minMax(args, false)
 		},
@@ -408,6 +429,14 @@ var Builtins = []*Builtin{
 		Fn: func(vm *VM, args ...Object) Object {
 			if len(args) != 2 {
 				return newError("contains() takes 2 arguments, got %d", len(args))
+			}
+			if arr, ok := args[0].(*Array); ok {
+				for _, el := range arr.Elements {
+					if objectsEqual(el, args[1]) {
+						return &BooleanObj{Value: true}
+					}
+				}
+				return &BooleanObj{Value: false}
 			}
 			s, ok1 := args[0].(*String)
 			sub, ok2 := args[1].(*String)
@@ -765,6 +794,11 @@ func init() {
 			},
 		},
 	)
+
+	// 0.4 data layer: batch transforms, tables, CSV/JSON and gated file I/O.
+	Builtins = append(Builtins, dataBuiltins()...)
+	Builtins = append(Builtins, tableBuiltins()...)
+	Builtins = append(Builtins, codecBuiltins()...)
 
 	builtinIndex = make(map[string]int, len(Builtins))
 	for i, b := range Builtins {

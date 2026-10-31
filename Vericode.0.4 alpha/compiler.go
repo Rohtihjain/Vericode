@@ -549,17 +549,18 @@ func (c *Compiler) Compile(node Node) error {
 // â”€â”€â”€ Identifier resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (c *Compiler) compileIdentifier(node *Identifier) error {
-	// Check builtins first
+	// User bindings shadow builtins, so `let sum = 0;` keeps working and
+	// programs are free to name variables after builtins.
+	kind, idx := c.resolveName(node.Value)
+	if kind != "" {
+		c.emitLoadName(kind, idx)
+		return nil
+	}
 	if idx, ok := builtinIndex[node.Value]; ok {
 		c.emit(OpGetBuiltin, idx)
 		return nil
 	}
-	kind, idx := c.resolveName(node.Value)
-	if kind == "" {
-		return c.errorf(node.Token.Line, node.Token.Col, "undefined variable '%s'", node.Value)
-	}
-	c.emitLoadName(kind, idx)
-	return nil
+	return c.errorf(node.Token.Line, node.Token.Col, "undefined variable '%s'", node.Value)
 }
 
 // â”€â”€â”€ if / else â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

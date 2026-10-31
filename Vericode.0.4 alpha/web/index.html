@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VeriCode 0.2 alpha — Studio</title>
+    <title>VeriCode 0.4 alpha — Studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -168,6 +168,7 @@
                 <option value="functional">Functional</option>
                 <option value="concurrency">Concurrency</option>
                 <option value="parallel">Parallel</option>
+                <option value="data">Data</option>
                 <option value="types">Floats &amp; Null</option>
                 <option value="kitchen">Kitchen Sink</option>
             </select>
@@ -454,6 +455,50 @@
                     'print pmap(nums, func(x) { return x * 100; }, 2);',
                 ].join('\n')
             },
+            data: {
+                hint: 'pipelines, tables, CSV and JSON. |> feeds a value into the first argument of the next call.',
+                code: [
+                    '// |> feeds the value on the left into the first argument',
+                    'let nums = range(1, 21);',
+                    '',
+                    'let total = nums',
+                    '    |> filter(func(x) { return x % 2 == 0; })',
+                    '    |> map(func(x) { return x * x; })',
+                    '    |> take(4)',
+                    '    |> sum;',
+                    'print "sum of squares: " + str(total);',
+                    '',
+                    '// tables are rows of hashes with an ordered header list',
+                    'let people = table([',
+                    '    {"name": "Ada", "age": 36, "city": "London"},',
+                    '    {"name": "Bob", "age": 5,  "city": "Paris"},',
+                    '    {"name": "Cy",  "age": 41, "city": "London"}',
+                    '], ["name", "age", "city"]);',
+                    'print people;',
+                    '',
+                    '// t[0] is a row hash; t["age"] is a whole column',
+                    'print people[0]["name"];',
+                    'print people["city"];',
+                    '',
+                    'let adults = people',
+                    '    |> twhere(func(row) { return row["age"] >= 18; })',
+                    '    |> tsort("age", "desc")',
+                    '    |> tselect("name", "age");',
+                    'print adults;',
+                    '',
+                    '// CSV values arrive as strings; convert them for math',
+                    'let text = "name,score\\nAda,95\\nBob,88\\n";',
+                    'let scores = csv_table(text);',
+                    'print scores;',
+                    'print scores["score"] |> map(func(s) { return int(s); }) |> sum;',
+                    'print csv_write(scores);',
+                    '',
+                    '// JSON keeps numbers, booleans and nesting',
+                    'let cfg = json_parse("{\\"debug\\": true, \\"retries\\": 3, \\"tags\\": [\\"x\\", \\"y\\"]}");',
+                    'print cfg["retries"] + 1;',
+                    'print json_write(cfg, 2);',
+                ].join('\n')
+            },
             types: {
                 hint: 'Floats, null, interpolation, format, and math/string helpers.',
                 code: [
@@ -587,7 +632,14 @@
                     'abs', 'min', 'max', 'sqrt', 'pow',
                     'split', 'join', 'trim', 'contains', 'replace', 'format',
                     'chan', 'send', 'recv', 'sleep',
-                    'pmap', 'pfilter', 'pfor', 'workers'
+                    'pmap', 'pfilter', 'pfor', 'workers',
+                    'take', 'drop', 'chunk', 'flatten', 'zip', 'enumerate',
+                    'uniq', 'sum', 'avg', 'sort', 'sort_by', 'reverse',
+                    'any', 'all', 'group_by', 'pluck',
+                    'table', 'columns', 'rows', 'tselect', 'twhere',
+                    'tsort', 'tgroup',
+                    'csv_parse', 'csv_write', 'csv_table',
+                    'json_parse', 'json_write', 'read_file', 'write_file'
                 ],
                 tokenizer: {
                     root: [

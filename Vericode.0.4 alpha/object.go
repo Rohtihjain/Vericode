@@ -21,6 +21,7 @@ const (
 	ERROR_OBJ       ObjectType = "ERROR"
 	CHANNEL_OBJ     ObjectType = "CHANNEL"
 	TASK_OBJ        ObjectType = "TASK"
+	TABLE_OBJ       ObjectType = "TABLE"
 )
 
 type Object interface {

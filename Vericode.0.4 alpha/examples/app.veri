@@ -1,0 +1,45 @@
+// VeriCode 0.6 — an HTTP API backed by a persistent store.
+// CLI only: the web IDE disables serve() and db_open().
+//
+//   veri -run examples/app.veri
+//
+// Then:
+//   curl http://localhost:8080/health
+//   curl -X POST -d "buy milk" http://localhost:8080/notes
+//   curl http://localhost:8080/notes
+//
+// Notes survive restarts because they live in app-store.json.
+
+let db = db_open("app-store.json");
+
+func health(req) {
+  return {"body": {"ok": true}};
+}
+
+func listNotes(req) {
+  if !db_has(db, "notes") {
+    return [];
+  }
+  return db_get(db, "notes");
+}
+
+func createNote(req) {
+  let notes = [];
+  if db_has(db, "notes") {
+    notes = db_get(db, "notes");
+  }
+  let note = {"id": len(notes) + 1, "text": req["body"]};
+  notes = push(notes, note);
+  db_set(db, "notes", notes);
+  print "new note: " + note["text"];
+  return {"status": 201, "body": note};
+}
+
+let routes = {
+  "GET /health": health,
+  "GET /notes": listNotes,
+  "POST /notes": createNote,
+};
+
+print "notes API — GET /health, GET /notes, POST /notes";
+serve(8080, routes);

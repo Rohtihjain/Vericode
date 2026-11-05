@@ -32,6 +32,14 @@ type Compiler struct {
 	source     string
 	sourceMap  []SourceLocation
 	currentLoc SourceLocation
+
+	// globalBase offsets every global slot. Imports compile modules at runtime
+	// into a slice of the caller's global table above the caller's own slots.
+	globalBase int
+
+	// replMode echoes bare expressions and rejects imports, whose runtime
+	// globals would otherwise collide with later REPL lines.
+	replMode bool
 }
 
 func NewCompiler() *Compiler {
@@ -67,8 +75,22 @@ func newFnCompiler(parent *Compiler) *Compiler {
 		source:       parent.source,
 		sourceMap:    make([]SourceLocation, 0),
 		currentLoc:   parent.currentLoc,
+		globalBase:   parent.globalBase,
+		replMode:     parent.replMode,
 	}
 }
+
+// SeedGlobals pre-populates the global name table. The REPL uses it to keep
+// earlier lines' names resolvable when compiling a new line.
+func (c *Compiler) SeedGlobals(symbols map[string]int) {
+	for name, idx := range symbols {
+		c.symbolTable[name] = idx
+	}
+}
+
+// SetREPLMode enables REPL-only behavior: bare expressions are echoed and
+// imports are rejected.
+func (c *Compiler) SetREPLMode(on bool) { c.replMode = on }
 
 // addFree registers a free variable name and returns its free-slot index.
 func (c *Compiler) addFree(name string) int {
@@ -102,6 +124,9 @@ func (c *Compiler) resolveName(name string) (kind string, index int) {
 	return "", -1
 }
 
+// globalSlot maps a compiler-local global index to its VM slot.
+func (c *Compiler) globalSlot(index int) int { return c.globalBase + index }
+
 // emitLoadName emits the right load opcode for a resolved name.
 func (c *Compiler) emitLoadName(kind string, index int) {
 	switch kind {
@@ -110,7 +135,7 @@ func (c *Compiler) emitLoadName(kind string, index int) {
 	case "free":
 		c.emit(OpGetFree, index)
 	case "global":
-		c.emit(OpGetGlobal, index)
+		c.emit(OpGetGlobal, c.globalSlot(index))
 	}
 }
 
@@ -122,7 +147,7 @@ func (c *Compiler) emitStoreName(kind string, index int) {
 	case "free":
 		c.emit(OpSetFree, index)
 	case "global":
-		c.emit(OpSetGlobal, index)
+		c.emit(OpSetGlobal, c.globalSlot(index))
 	}
 }
 
@@ -173,7 +198,11 @@ func (c *Compiler) Compile(node Node) error {
 		if err := c.Compile(node.Expression); err != nil {
 			return err
 		}
-		c.emit(OpPop)
+		if c.replMode && !c.isLocal {
+			c.emit(OpEcho)
+		} else {
+			c.emit(OpPop)
+		}
 
 	case *PrintStatement:
 		if err := c.Compile(node.Value); err != nil {
@@ -213,7 +242,7 @@ func (c *Compiler) Compile(node Node) error {
 					fn.Name = node.Name.Value
 				}
 			}
-			c.emit(OpSetGlobal, idx)
+			c.emit(OpSetGlobal, c.globalSlot(idx))
 		}
 
 	case *AssignStatement:
@@ -264,7 +293,7 @@ func (c *Compiler) Compile(node Node) error {
 				idx = len(c.symbolTable)
 				c.symbolTable[node.Name.Value] = idx
 			}
-			c.emit(OpSetGlobal, idx)
+			c.emit(OpSetGlobal, c.globalSlot(idx))
 		}
 
 	case *ReturnStatement:
@@ -284,6 +313,18 @@ func (c *Compiler) Compile(node Node) error {
 		// Point the raise at 'throw', not at the thrown expression.
 		c.setNodeLoc(node)
 		c.emit(OpThrow)
+
+	case *ImportStatement:
+		if c.replMode {
+			return c.errorf(node.Token.Line, node.Token.Col,
+				"import is not supported in the REPL; run a file with veri -run instead")
+		}
+		pathIdx := c.addConstant(&String{Value: node.Path.Value})
+		c.emit(OpConstant, pathIdx)
+		c.setNodeLoc(node)
+		c.emit(OpImport)
+		kind, idx := c.declareName(node.Name.Value)
+		c.emitStoreName(kind, idx)
 
 	case *IfStatement:
 		return c.compileIf(node.Condition, node.Consequence, node.Alternative)
@@ -444,6 +485,7 @@ func (c *Compiler) Compile(node Node) error {
 			NumLocals:    len(fnC.localTable),
 			SourceMap:    fnC.sourceMap,
 			Filename:     fnC.filename,
+			Source:       fnC.source,
 			Name:         node.Name,
 			Constants:    fnC.constants,
 		})
@@ -759,7 +801,7 @@ func (c *Compiler) compileCountLoop(node *LoopStatement) error {
 		counterKey := fmt.Sprintf("__loop_%d", len(c.symbolTable))
 		counterIdx = len(c.symbolTable)
 		c.symbolTable[counterKey] = counterIdx
-		c.emit(OpSetGlobal, counterIdx)
+		c.emit(OpSetGlobal, c.globalSlot(counterIdx))
 	}
 
 	startPos := len(c.instructions)
@@ -768,7 +810,7 @@ func (c *Compiler) compileCountLoop(node *LoopStatement) error {
 	if c.isLocal {
 		c.emit(OpGetLocal, counterIdx)
 	} else {
-		c.emit(OpGetGlobal, counterIdx)
+		c.emit(OpGetGlobal, c.globalSlot(counterIdx))
 	}
 	c.emit(OpConstant, c.addConstant(&Integer{Value: 0}))
 	c.emit(OpGreaterThan)
@@ -796,10 +838,10 @@ func (c *Compiler) compileCountLoop(node *LoopStatement) error {
 		c.emit(OpSub)
 		c.emit(OpSetLocal, counterIdx)
 	} else {
-		c.emit(OpGetGlobal, counterIdx)
+		c.emit(OpGetGlobal, c.globalSlot(counterIdx))
 		c.emit(OpConstant, c.addConstant(&Integer{Value: 1}))
 		c.emit(OpSub)
-		c.emit(OpSetGlobal, counterIdx)
+		c.emit(OpSetGlobal, c.globalSlot(counterIdx))
 	}
 
 	c.emit(OpJump, startPos)
@@ -921,12 +963,17 @@ func (c *Compiler) changeOperand(opPos int, operand int) {
 }
 
 func (c *Compiler) Bytecode() *Bytecode {
+	symbols := make([]string, len(c.symbolTable))
+	for name, idx := range c.symbolTable {
+		symbols[idx] = name
+	}
 	return &Bytecode{
 		Instructions: c.instructions,
 		Constants:    c.constants,
 		SourceMap:    c.sourceMap,
 		Source:       c.source,
 		Filename:     c.filename,
+		Symbols:      symbols,
 	}
 }
 
@@ -936,4 +983,5 @@ type Bytecode struct {
 	SourceMap    []SourceLocation
 	Source       string
 	Filename     string
+	Symbols      []string // global slot names in index order
 }

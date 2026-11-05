@@ -57,9 +57,12 @@ type Parser struct {
 	infixParseFns  map[TokenType]infixParseFn
 }
 
+// SetFilename makes parse diagnostics point at a real file instead of
+// "<input>".
+func (p *Parser) SetFilename(name string) { p.filename = name }
+
 func NewParser(l *Lexer) *Parser {
 	p := &Parser{l: l, errors: []string{}, source: l.input, filename: "<input>"}
-
 	p.prefixParseFns = make(map[TokenType]prefixParseFn)
 	p.registerPrefix(IDENT, p.parseIdentifier)
 	p.registerPrefix(INT, p.parseIntegerLiteral)
@@ -169,6 +172,8 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseTryStatement()
 	case THROW:
 		return p.parseThrowStatement()
+	case IMPORT:
+		return p.parseImportStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -276,6 +281,27 @@ func (p *Parser) parseThrowStatement() *ThrowStatement {
 	stmt := &ThrowStatement{Token: p.curToken}
 	p.nextToken()
 	stmt.Value = p.parseExpression(LOWEST)
+	if p.peekTokenIs(SEMICOLON) {
+		p.nextToken()
+	}
+	return stmt
+}
+
+func (p *Parser) parseImportStatement() *ImportStatement {
+	stmt := &ImportStatement{Token: p.curToken}
+	if !p.expectPeek(IDENT) {
+		return nil
+	}
+	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	if !p.peekTokenIs(FROM) {
+		p.addError(p.peekToken, "expected 'from' after import name")
+		return nil
+	}
+	p.nextToken() // from
+	if !p.expectPeek(STRING) {
+		return nil
+	}
+	stmt.Path = &StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
 	if p.peekTokenIs(SEMICOLON) {
 		p.nextToken()
 	}

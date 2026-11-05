@@ -49,6 +49,8 @@ const (
 	OpTryEnd
 	OpTryPop
 	OpThrow
+	OpImport
+	OpEcho
 )
 
 type Definition struct {
@@ -101,6 +103,8 @@ var definitions = map[Opcode]*Definition{
 	OpTryEnd:             {"OpTryEnd", nil},
 	OpTryPop:             {"OpTryPop", nil},
 	OpThrow:              {"OpThrow", nil},
+	OpImport:             {"OpImport", nil},
+	OpEcho:               {"OpEcho", nil},
 }
 
 func Make(op Opcode, operands ...int) []byte {

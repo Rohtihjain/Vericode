@@ -23,6 +23,7 @@ const (
 	CHANNEL_OBJ     ObjectType = "CHANNEL"
 	TASK_OBJ        ObjectType = "TASK"
 	TABLE_OBJ       ObjectType = "TABLE"
+	STORE_OBJ       ObjectType = "STORE"
 )
 
 type Object interface {
@@ -108,6 +109,7 @@ type CompiledFunction struct {
 	SourceMap    []SourceLocation
 	Name         string
 	Filename     string
+	Source       string // source text for diagnostics, set at compile time
 	Constants    []Object // parent constant pool, set at emit time
 }
 

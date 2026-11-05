@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+const version = "0.7"
 
 //go:embed web/*
 var embeddedWeb embed.FS
@@ -53,26 +56,45 @@ type CodeResponse struct {
 	Errors string `json:"errors,omitempty"`
 }
 
-func runCode(code string, allowIO bool) (string, string) {
-	// Lex
+// compileCode lexes, parses, and compiles source without executing it.
+func compileCode(code, filename string) (*Bytecode, string) {
 	lexer := NewLexer(code)
 	parser := NewParser(lexer)
+	parser.SetFilename(filename)
 	program := parser.ParseProgram()
 
 	if errs := parser.Errors(); len(errs) > 0 {
-		return "", strings.Join(errs, "\n")
+		return nil, strings.Join(errs, "\n")
 	}
 
 	// Compile with source so diagnostics can show line + snippet
-	compiler := NewCompilerWithSource("<input>", code)
+	compiler := NewCompilerWithSource(filename, code)
 	if err := compiler.Compile(program); err != nil {
-		return "", err.Error()
+		return nil, err.Error()
+	}
+	return compiler.Bytecode(), ""
+}
+
+func runCode(code, filename string, allowIO bool, args []string) (string, string) {
+	return runCodeLive(code, filename, allowIO, args, nil)
+}
+
+// runCodeLive runs a program and, when live is non-nil, streams each printed
+// line to it immediately. The full output is still returned.
+func runCodeLive(code, filename string, allowIO bool, args []string, live io.Writer) (string, string) {
+	bytecode, errMsg := compileCode(code, filename)
+	if errMsg != "" {
+		return "", errMsg
 	}
 
 	// Execute. The web IDE disables file access (allowIO=false); the CLI
 	// enables it for scripts that read or write CSV/JSON files.
-	vm := NewVM(compiler.Bytecode())
+	vm := NewVM(bytecode)
 	vm.SetAllowIO(allowIO)
+	vm.SetArgs(args)
+	if live != nil {
+		vm.SetLiveOutput(live)
+	}
 	if err := vm.Run(); err != nil {
 		return "", err.Error()
 	}
@@ -82,6 +104,15 @@ func runCode(code string, allowIO bool) (string, string) {
 		out = "(no output)"
 	}
 	return out, ""
+}
+
+// readSourceFile reads a program and strips a UTF-8 BOM if present.
+func readSourceFile(path string) (string, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(string(src), "\xef\xbb\xbf"), nil
 }
 
 func handleRun(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +138,7 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	// Strip non-breaking spaces that Monaco can insert
 	code := strings.ReplaceAll(req.Code, "\u00A0", " ")
 
-	output, errMsg := runCode(code, false)
+	output, errMsg := runCode(code, "<input>", false, nil)
 	if errMsg != "" {
 		json.NewEncoder(w).Encode(CodeResponse{Errors: errMsg})
 		return
@@ -115,27 +146,66 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(CodeResponse{Output: output})
 }
 
+func printUsage() {
+	fmt.Printf("VeriCode %s\n\n", version)
+	fmt.Println("Usage:")
+	fmt.Println("  veri -run <file.veri> [args...]   run a source file (file I/O enabled)")
+	fmt.Println("  veri -check <file.veri>           parse and compile without running")
+	fmt.Println("  veri -e '<code>' [args...]        run inline source (file I/O enabled)")
+	fmt.Println("  veri -repl [args...]              start an interactive session")
+	fmt.Println("  veri -web                         start the web IDE on :8080 (file I/O disabled)")
+	fmt.Println("  veri -version                     print the version")
+}
+
 func main() {
 	webFlag := flag.Bool("web", false, "Start the VeriCode web IDE")
 	runFlag := flag.String("run", "", "Run a .veri source file")
+	checkFlag := flag.String("check", "", "Parse and compile a .veri file without running it")
+	evalFlag := flag.String("e", "", "Run inline source")
+	replFlag := flag.Bool("repl", false, "Start an interactive session")
+	versionFlag := flag.Bool("version", false, "Print the version")
+	flag.Usage = printUsage
 	flag.Parse()
 
 	switch {
+	case *versionFlag:
+		fmt.Println(version)
+
 	case *runFlag != "":
-		src, err := os.ReadFile(*runFlag)
+		code, err := readSourceFile(*runFlag)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: cannot read file '%s': %v\n", *runFlag, err)
 			os.Exit(1)
 		}
-		// Strip UTF-8 BOM if present
-		code := string(src)
-		code = strings.TrimPrefix(code, "\xef\xbb\xbf")
-		output, errMsg := runCode(code, true)
+		// Stream output so long-running programs (servers, loops) show progress
+		// while they run instead of only at exit.
+		_, errMsg := runCodeLive(code, *runFlag, true, flag.Args(), os.Stdout)
 		if errMsg != "" {
 			fmt.Fprintln(os.Stderr, errMsg)
 			os.Exit(1)
 		}
-		fmt.Println(output)
+
+	case *checkFlag != "":
+		code, err := readSourceFile(*checkFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: cannot read file '%s': %v\n", *checkFlag, err)
+			os.Exit(1)
+		}
+		if _, errMsg := compileCode(code, *checkFlag); errMsg != "" {
+			fmt.Fprintln(os.Stderr, errMsg)
+			os.Exit(1)
+		}
+		fmt.Printf("%s: ok\n", *checkFlag)
+
+	case *evalFlag != "":
+		_, errMsg := runCodeLive(*evalFlag, "<eval>", true, flag.Args(), os.Stdout)
+		if errMsg != "" {
+			fmt.Fprintln(os.Stderr, errMsg)
+			os.Exit(1)
+		}
+
+	case *replFlag:
+		runREPL(os.Stdin, os.Stdout, os.Stderr, flag.Args())
 
 	case *webFlag:
 		webFS, source := resolveWebDir()
@@ -154,8 +224,6 @@ func main() {
 		}
 
 	default:
-		fmt.Println("VeriCode 0.5 alpha")
-		fmt.Println("  veri -run <file.veri>   run a source file (file I/O enabled)")
-		fmt.Println("  veri -web               start the web IDE on :8080 (file I/O disabled)")
+		printUsage()
 	}
 }

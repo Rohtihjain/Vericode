@@ -200,6 +200,65 @@ func codecBuiltins() []*Builtin {
 				return &Null{}
 			},
 		},
+		{
+			Name: "read_lines",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) != 1 {
+					return newError("read_lines() takes 1 argument (path), got %d", len(args))
+				}
+				path, ok := args[0].(*String)
+				if !ok {
+					return newError("read_lines() path must be a string, got %s", args[0].Type())
+				}
+				if !vm.allowIO {
+					return newError("read_lines() is disabled in the web IDE; run with the CLI (veri -run file.veri) to read files")
+				}
+				data, err := os.ReadFile(path.Value)
+				if err != nil {
+					return newError("read_lines() cannot read '%s': %v", path.Value, err)
+				}
+				text := strings.ReplaceAll(string(data), "\r\n", "\n")
+				text = strings.TrimSuffix(text, "\n")
+				lines := []Object{}
+				if text != "" {
+					for _, line := range strings.Split(text, "\n") {
+						lines = append(lines, &String{Value: line})
+					}
+				}
+				return &Array{Elements: lines}
+			},
+		},
+		{
+			Name: "append_file",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) != 2 {
+					return newError("append_file() takes 2 arguments (path, text), got %d", len(args))
+				}
+				path, ok := args[0].(*String)
+				if !ok {
+					return newError("append_file() path must be a string, got %s", args[0].Type())
+				}
+				text, ok := args[1].(*String)
+				if !ok {
+					return newError("append_file() text must be a string, got %s (use str() to convert)", args[1].Type())
+				}
+				if !vm.allowIO {
+					return newError("append_file() is disabled in the web IDE; run with the CLI (veri -run file.veri) to write files")
+				}
+				f, err := os.OpenFile(path.Value, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				if err != nil {
+					return newError("append_file() cannot open '%s': %v", path.Value, err)
+				}
+				if _, err := f.WriteString(text.Value); err != nil {
+					f.Close()
+					return newError("append_file() cannot write '%s': %v", path.Value, err)
+				}
+				if err := f.Close(); err != nil {
+					return newError("append_file() cannot write '%s': %v", path.Value, err)
+				}
+				return &Null{}
+			},
+		},
 	}
 }
 

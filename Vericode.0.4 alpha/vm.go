@@ -18,6 +18,7 @@ type frame struct {
 	instructions []byte
 	cl           *Closure // non-nil when executing a closure
 	handlersBase int      // try handlers active when this frame was entered
+	source       string   // source text for diagnostics (module code differs)
 }
 
 // catchHandler is a try/catch handler registered by OpTryBegin. target is an
@@ -40,7 +41,8 @@ type VM struct {
 	lastPopped  Object
 	frames      [512]frame
 	frameCount  int
-	input       io.Reader
+	input       *stdinReader
+	args        []string // command-line arguments after the script path
 	sourceMap   []SourceLocation
 	source      string
 	filename    string
@@ -52,6 +54,47 @@ type VM struct {
 	detector     *deadlockDetector
 	vmID         int64
 	handlers     []catchHandler // active try handlers, innermost last
+	imports      *importState   // module cache + next free global slot
+}
+
+// stdinReader owns one buffered scanner per input stream so successive ask
+// calls consume successive lines instead of reopening the reader (which would
+// discard buffered input). Child VMs share the pointer, and the mutex keeps
+// concurrent ask calls from interleaving reads.
+type stdinReader struct {
+	mu      sync.Mutex
+	r       io.Reader
+	scanner *bufio.Scanner
+}
+
+func newStdinReader(r io.Reader) *stdinReader { return &stdinReader{r: r} }
+
+func (s *stdinReader) readLine() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.r == nil {
+		return "", false
+	}
+	if s.scanner == nil {
+		s.scanner = bufio.NewScanner(s.r)
+	}
+	if s.scanner.Scan() {
+		return s.scanner.Text(), true
+	}
+	return "", false
+}
+
+func (s *stdinReader) setReader(r io.Reader) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.r = r
+	s.scanner = nil
 }
 
 func NewVM(bytecode *Bytecode) *VM {
@@ -60,7 +103,7 @@ func NewVM(bytecode *Bytecode) *VM {
 		stack:     make([]Object, 65536),
 		globals:   make([]Object, 65536),
 		out:       &OutputCollector{},
-		input:     os.Stdin,
+		input:     newStdinReader(os.Stdin),
 		sourceMap: bytecode.SourceMap,
 		source:    bytecode.Source,
 		filename:  bytecode.Filename,
@@ -68,6 +111,7 @@ func NewVM(bytecode *Bytecode) *VM {
 		killOnce:  &sync.Once{},
 		detector:  newDeadlockDetector(),
 		vmID:      nextVMID(),
+		imports:   newImportState(len(bytecode.Symbols)),
 	}
 	vm.frames[0] = frame{ip: -1, instructions: bytecode.Instructions}
 	vm.frameCount = 1
@@ -117,7 +161,11 @@ func (vm *VM) newRuntimeError(fatal bool, kind, format string, args ...interface
 	}
 	if loc.Line > 0 {
 		loc.Filename = filename
-		out := FormatDiagnostic(filename, vm.source, kind, msg, loc.Line, loc.Col)
+		source := f.source
+		if source == "" {
+			source = vm.source
+		}
+		out := FormatDiagnostic(filename, source, kind, msg, loc.Line, loc.Col)
 		trace := vm.captureStackTrace()
 		if trace != "" {
 			out += "\n" + trace
@@ -210,15 +258,43 @@ func diagnosticTail(s string) string {
 	return ""
 }
 
-func (vm *VM) SetInput(r io.Reader) { vm.input = r }
+func (vm *VM) SetInput(r io.Reader) { vm.input.setReader(r) }
+
+// SetArgs supplies the command-line arguments exposed by args(). The web IDE
+// passes none; the CLI passes everything after the script path.
+func (vm *VM) SetArgs(args []string) { vm.args = args }
 
 // SetAllowIO enables read_file/write_file. The CLI turns this on; the web
 // IDE leaves it off so posted code cannot touch the host filesystem.
 func (vm *VM) SetAllowIO(allow bool) { vm.allowIO = allow }
 
+// SetLiveOutput streams printed lines to w as they happen instead of only
+// collecting them. The CLI uses it so servers show startup and request output
+// while they run.
+func (vm *VM) SetLiveOutput(w io.Writer) { vm.out.setLive(w) }
+
 func (vm *VM) currentFrame() *frame  { return &vm.frames[vm.frameCount-1] }
+
+// constantsFor returns the pool belonging to the running code. Functions
+// compiled at runtime (imported modules) carry their own pool, so a frame
+// must not read the enclosing VM's constants.
+func (vm *VM) constantsFor(f *frame) []Object {
+	if f.cl != nil && f.cl.Fn != nil && f.cl.Fn.Constants != nil {
+		return f.cl.Fn.Constants
+	}
+	return vm.constants
+}
+
 func (vm *VM) pushFrame(f frame) {
 	f.handlersBase = len(vm.handlers)
+	if f.source == "" {
+		if f.cl != nil && f.cl.Fn != nil {
+			f.source = f.cl.Fn.Source
+		}
+		if f.source == "" {
+			f.source = vm.source
+		}
+	}
 	vm.frames[vm.frameCount] = f
 	vm.frameCount++
 }
@@ -311,6 +387,39 @@ func (vm *VM) Run() error {
 	return err
 }
 
+// RunBytecode executes another compiled program in this VM while keeping its
+// globals intact. The REPL uses it to run each input line in one session.
+// Unlike Run, a successful line leaves the VM reusable.
+func (vm *VM) RunBytecode(bc *Bytecode) error {
+	vm.constants = bc.Constants
+	vm.sourceMap = bc.SourceMap
+	vm.source = bc.Source
+	vm.filename = bc.Filename
+	vm.frames[0] = frame{ip: -1, instructions: bc.Instructions}
+	vm.frameCount = 1
+	vm.sp = 0
+	vm.handlers = nil
+	// A failed line closes the cancellation channel; reopen it for the next one.
+	if vm.isCancelled() {
+		vm.cancel = make(chan struct{})
+		vm.killOnce = &sync.Once{}
+	}
+	if vm.detector != nil {
+		vm.detector.enter(vm.vmID, "main")
+		defer vm.detector.leave(vm.vmID)
+	}
+	return vm.runAndWait()
+}
+
+func (vm *VM) isCancelled() bool {
+	select {
+	case <-vm.cancel:
+		return true
+	default:
+		return false
+	}
+}
+
 // ─── Main execution loop ──────────────────────────────────────────────────────
 
 // runUntilDepth runs until frameCount drops to targetDepth, resuming at a
@@ -393,7 +502,7 @@ func (vm *VM) execute(targetDepth int) error {
 		case OpConstant:
 			idx := int(binary.BigEndian.Uint16(ins[f.ip+1:]))
 			f.ip += 2
-			if err := vm.push(vm.constants[idx]); err != nil {
+			if err := vm.push(vm.constantsFor(f)[idx]); err != nil {
 				return err
 			}
 
@@ -417,6 +526,16 @@ func (vm *VM) execute(targetDepth int) error {
 			val := vm.pop()
 			if val != nil {
 				vm.out.append(val.Inspect())
+			}
+
+		case OpEcho:
+			// REPL echo: show bare expression results, but stay quiet for
+			// statements that evaluate to null.
+			val := vm.pop()
+			if val != nil {
+				if _, isNull := val.(*Null); !isNull {
+					vm.out.append(val.Inspect())
+				}
 			}
 
 		case OpSetGlobal:
@@ -568,10 +687,7 @@ func (vm *VM) execute(targetDepth int) error {
 			}
 			var line string
 			if vm.input != nil {
-				scanner := bufio.NewScanner(vm.input)
-				if scanner.Scan() {
-					line = scanner.Text()
-				}
+				line, _ = vm.input.readLine()
 			}
 			if err := vm.push(&String{Value: line}); err != nil {
 				return err
@@ -635,7 +751,7 @@ func (vm *VM) execute(targetDepth int) error {
 			constIdx := int(binary.BigEndian.Uint16(ins[f.ip+1:]))
 			numFree := int(ins[f.ip+3])
 			f.ip += 3
-			fn, ok := vm.constants[constIdx].(*CompiledFunction)
+			fn, ok := vm.constantsFor(f)[constIdx].(*CompiledFunction)
 			if !ok {
 				return vm.runtimeError("OpClosure constant is not a function")
 			}
@@ -737,6 +853,20 @@ func (vm *VM) execute(targetDepth int) error {
 				return vm.runtimeError("null")
 			default:
 				return vm.runtimeError("%s", v.Inspect())
+			}
+
+		case OpImport:
+			pathObj := vm.pop()
+			path, ok := pathObj.(*String)
+			if !ok {
+				return vm.runtimeError("import path must be a string")
+			}
+			ns, err := vm.importModule(path.Value)
+			if err != nil {
+				return vm.importError(path.Value, err)
+			}
+			if err := vm.push(ns); err != nil {
+				return err
 			}
 		}
 	}

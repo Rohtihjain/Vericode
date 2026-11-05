@@ -245,6 +245,19 @@ func (ts *ThrowStatement) String() string {
 	return "throw " + ts.Value.String() + ";"
 }
 
+// import name from "path";
+type ImportStatement struct {
+	Token Token // the IMPORT token
+	Name  *Identifier
+	Path  *StringLiteral
+}
+
+func (is *ImportStatement) statementNode()       {}
+func (is *ImportStatement) TokenLiteral() string { return is.Token.Literal }
+func (is *ImportStatement) String() string {
+	return "import " + is.Name.String() + " from " + is.Path.String() + ";"
+}
+
 // ─── Expressions ──────────────────────────────────────────────────────────────
 
 type Identifier struct {

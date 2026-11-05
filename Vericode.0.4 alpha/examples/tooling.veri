@@ -1,0 +1,24 @@
+// Interactive tooling and assertions (0.6).
+// Run with: veri -run examples/tooling.veri
+// Try the REPL too: veri -repl
+
+func average(xs) {
+    assert(len(xs) > 0, "average() needs at least one value");
+    return sum(xs) / len(xs);
+}
+
+print average([2, 4, 6]);
+
+try {
+    average([]);
+} catch err {
+    print "caught: " + err["message"];
+}
+
+print "args: " + str(args());
+print "die roll: " + str(random(1, 7));
+print "clock is running: " + str(now() > 0);
+
+// exec() runs a command without a shell (CLI only):
+// let r = exec("git", ["--version"]);
+// print trim(r["stdout"]);

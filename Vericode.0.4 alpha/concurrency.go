@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -10,29 +12,64 @@ import (
 
 // OutputCollector gathers print output from the main VM and every spawned
 // task. The mutex makes concurrent appends safe; line order is scheduling
-// order, which is intentionally unspecified.
+// order, which is intentionally unspecified. An optional live writer receives
+// each line immediately — long-running programs such as servers need that.
 type OutputCollector struct {
 	mu    sync.Mutex
 	lines []string
+	live  io.Writer
 }
 
 func (c *OutputCollector) append(line string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.lines = append(c.lines, line)
-	c.mu.Unlock()
+	if c.live != nil {
+		fmt.Fprintln(c.live, line)
+	}
+}
+
+func (c *OutputCollector) setLive(w io.Writer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.live = w
 }
 
 func (c *OutputCollector) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := ""
-	for i, l := range c.lines {
-		if i > 0 {
-			out += "\n"
-		}
-		out += l
+	return joinOutputLines(c.lines)
+}
+
+// Len reports how many output lines have been collected so far.
+func (c *OutputCollector) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.lines)
+}
+
+// Since returns the lines collected after the first n, joined like String.
+func (c *OutputCollector) Since(n int) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if n < 0 {
+		n = 0
 	}
-	return out
+	if n > len(c.lines) {
+		n = len(c.lines)
+	}
+	return joinOutputLines(c.lines[n:])
+}
+
+func joinOutputLines(lines []string) string {
+	var b strings.Builder
+	for i, l := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(l)
+	}
+	return b.String()
 }
 
 // ─── Snapshot isolation ───────────────────────────────────────────────────────
@@ -177,6 +214,7 @@ func (vm *VM) spawnTask(fnObj Object, args []Object) Object {
 		globals:    snapshotGlobals(vm.globals),
 		out:          vm.out,
 		input:        vm.input,
+		args:         vm.args,
 		cancel:       make(chan struct{}),
 		parentCancel: vm.cancel,
 		killOnce:     &sync.Once{},
@@ -186,6 +224,7 @@ func (vm *VM) spawnTask(fnObj Object, args []Object) Object {
 		allowIO:      vm.allowIO,
 		detector:     vm.detector,
 		vmID:         nextVMID(),
+		imports:      vm.freshImportState(),
 	}
 	child.frames[0] = frame{
 		ip:           -1,

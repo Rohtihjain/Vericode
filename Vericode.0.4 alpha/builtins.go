@@ -824,6 +824,16 @@ func init() {
 	Builtins = append(Builtins, tableBuiltins()...)
 	Builtins = append(Builtins, codecBuiltins()...)
 
+	// 0.5 scripting layer: args, env, clock, randomness.
+	Builtins = append(Builtins, scriptBuiltins()...)
+
+	// 0.6 applications: a file-backed store and an HTTP server.
+	Builtins = append(Builtins, persistenceBuiltins()...)
+	Builtins = append(Builtins, serveBuiltins()...)
+
+	// 0.7 tooling: assertions and the native command hook.
+	Builtins = append(Builtins, nativeBuiltins()...)
+
 	builtinIndex = make(map[string]int, len(Builtins))
 	for i, b := range Builtins {
 		builtinIndex[b.Name] = i

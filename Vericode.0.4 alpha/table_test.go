@@ -258,3 +258,84 @@ print rows(t) |> pmap(func(row) { return row["n"] * 10; }, 2);
 		t.Fatalf("got %q want [10, 20, 30]", out)
 	}
 }
+
+func TestTableJoinInner(t *testing.T) {
+	out := mustRun(t, `
+let people = table([
+  {"id": 1, "name": "Ada"},
+  {"id": 2, "name": "Bob"},
+  {"id": 3, "name": "Cy"}
+], ["id", "name"]);
+let scores = table([
+  {"id": 1, "score": 90},
+  {"id": 3, "score": 70},
+  {"id": 3, "score": 75}
+], ["id", "score"]);
+let j = tjoin(people, scores, "id");
+print columns(j);
+print len(j);
+print j[0]["name"] + ":" + str(j[0]["score"]);
+print j[1]["name"] + ":" + str(j[1]["score"]);
+print j[2]["name"] + ":" + str(j[2]["score"]);
+`)
+	want := "[id, name, score]\n3\nAda:90\nCy:70\nCy:75"
+	if strings.TrimSpace(out) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+func TestTableJoinLeft(t *testing.T) {
+	out := mustRun(t, `
+let people = table([
+  {"id": 1, "name": "Ada"},
+  {"id": 2, "name": "Bob"}
+], ["id", "name"]);
+let scores = table([{"id": 1, "score": 90}], ["id", "score"]);
+let j = tjoin(people, scores, "id", "left");
+print len(j);
+print j[0]["name"] + ":" + str(j[0]["score"]);
+print j[1]["name"] + ":" + str(j[1]["score"] == null);
+`)
+	want := "2\nAda:90\nBob:true"
+	if strings.TrimSpace(out) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+func TestTableJoinSuffixesCollidingColumns(t *testing.T) {
+	out := mustRun(t, `
+let a = table([{"id": 1, "v": "left"}], ["id", "v"]);
+let b = table([{"id": 1, "v": "right"}], ["id", "v"]);
+let j = tjoin(a, b, "id");
+print columns(j);
+print j[0]["v"] + "/" + j[0]["v_right"];
+`)
+	want := "[id, v, v_right]\nleft/right"
+	if strings.TrimSpace(out) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+func TestTableJoinErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"missing left column", `let a = table([{"id": 1}], ["id"]); let b = table([{"id": 1}], ["id"]); tjoin(a, b, "nope");`, "left table has no column"},
+		{"missing right column", `let a = table([{"id": 1}], ["id"]); let b = table([{"x": 1}], ["x"]); tjoin(a, b, "id");`, "right table has no column"},
+		{"bad mode", `let a = table([{"id": 1}], ["id"]); tjoin(a, a, "id", "outer");`, "mode must be"},
+		{"bad key type", `let a = table([{"id": [1]}], ["id"]); tjoin(a, a, "id");`, "must be hashable"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runSource(t, tc.src)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got output %q", tc.want, out)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}

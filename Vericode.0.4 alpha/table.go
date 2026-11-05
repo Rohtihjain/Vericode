@@ -402,5 +402,130 @@ func tableBuiltins() []*Builtin {
 				return &Hash{Pairs: groups}
 			},
 		},
+		{
+			Name: "tjoin",
+			Fn: func(vm *VM, args ...Object) Object {
+				if len(args) < 3 || len(args) > 4 {
+					return newError("tjoin() takes 3-4 arguments (left, right, key, [inner|left]), got %d", len(args))
+				}
+				left, ok := args[0].(*Table)
+				if !ok {
+					return newError("tjoin() first argument must be a table, got %s", args[0].Type())
+				}
+				right, ok := args[1].(*Table)
+				if !ok {
+					return newError("tjoin() second argument must be a table, got %s", args[1].Type())
+				}
+				key, ok := args[2].(*String)
+				if !ok {
+					return newError("tjoin() join column must be a string, got %s", args[2].Type())
+				}
+				mode := "inner"
+				if len(args) == 4 {
+					m, ok := args[3].(*String)
+					if !ok {
+						return newError("tjoin() mode must be \"inner\" or \"left\", got %s", args[3].Type())
+					}
+					mode = strings.ToLower(m.Value)
+					if mode != "inner" && mode != "left" {
+						return newError("tjoin() mode must be \"inner\" or \"left\", got '%s'", m.Value)
+					}
+				}
+				if left.columnIndex(key.Value) < 0 {
+					return newError("tjoin() left table has no column '%s'; columns are %s", key.Value, strings.Join(left.Headers, ", "))
+				}
+				if right.columnIndex(key.Value) < 0 {
+					return newError("tjoin() right table has no column '%s'; columns are %s", key.Value, strings.Join(right.Headers, ", "))
+				}
+
+				// Right-side columns keep the key out and get a suffix when they
+				// collide with a left-side name.
+				used := make(map[string]bool, len(left.Headers))
+				for _, h := range left.Headers {
+					used[h] = true
+				}
+				rightCols := make([]string, 0, len(right.Headers))
+				for _, h := range right.Headers {
+					if h == key.Value {
+						continue
+					}
+					name := h
+					for used[name] {
+						name += "_right"
+					}
+					used[name] = true
+					rightCols = append(rightCols, name)
+				}
+
+				index := make(map[string][]*Hash)
+				for _, row := range right.Rows {
+					k, bad := joinKey(row, key.Value)
+					if bad != nil {
+						return newError("tjoin() right key in column '%s' must be hashable (integer, float, boolean, or string), got %s", key.Value, bad.Type())
+					}
+					if k != "" {
+						index[k] = append(index[k], row)
+					}
+				}
+
+				headers := append(append([]string(nil), left.Headers...), rightCols...)
+				out := &Table{Headers: headers, Rows: []*Hash{}}
+				for _, lrow := range left.Rows {
+					k, bad := joinKey(lrow, key.Value)
+					if bad != nil {
+						return newError("tjoin() left key in column '%s' must be hashable (integer, float, boolean, or string), got %s", key.Value, bad.Type())
+					}
+					matches := index[k]
+					if len(matches) == 0 {
+						if mode == "left" {
+							out.Rows = append(out.Rows, joinRow(lrow, nil, key.Value, right.Headers, rightCols))
+						}
+						continue
+					}
+					for _, rrow := range matches {
+						out.Rows = append(out.Rows, joinRow(lrow, rrow, key.Value, right.Headers, rightCols))
+					}
+				}
+				return out
+			},
+		},
 	}
+}
+
+// joinKey returns the hash key for a join column. A nil second result means
+// the value is null (which never matches); otherwise it is the offending
+// non-hashable value.
+func joinKey(row *Hash, col string) (string, Object) {
+	v := rowCell(row, col)
+	if v == nil || v.Type() == NULL_OBJ {
+		return "", nil
+	}
+	h, ok := v.(Hashable)
+	if !ok {
+		return "", v
+	}
+	return h.HashKey(), nil
+}
+
+// joinRow merges one left row with one right row. A nil right row leaves the
+// right-hand columns null, which is what a left join needs.
+func joinRow(left, right *Hash, key string, rightHeaders, rightCols []string) *Hash {
+	pairs := make(map[string]HashPairObj, len(left.Pairs)+len(rightCols))
+	for k, p := range left.Pairs {
+		pairs[k] = p
+	}
+	ri := 0
+	for _, h := range rightHeaders {
+		if h == key {
+			continue
+		}
+		col := rightCols[ri]
+		ri++
+		var val Object = &Null{}
+		if right != nil {
+			val = rowCell(right, h)
+		}
+		pairs[cellKey(col)] = HashPairObj{Key: &String{Value: col}, Value: val}
+	}
+	return &Hash{Pairs: pairs}
 }

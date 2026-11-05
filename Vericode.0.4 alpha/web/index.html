@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VeriCode 0.5 alpha — Studio</title>
+    <title>VeriCode 0.7 alpha — Studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -169,7 +169,9 @@
                 <option value="concurrency">Concurrency</option>
                 <option value="parallel">Parallel</option>
                 <option value="data">Data</option>
+                <option value="joins">Joins</option>
                 <option value="errors">Errors</option>
+                <option value="scripting">Scripting</option>
                 <option value="types">Floats &amp; Null</option>
                 <option value="kitchen">Kitchen Sink</option>
             </select>
@@ -500,6 +502,28 @@
                     'print json_write(cfg, 2);',
                 ].join('\n')
             },
+            joins: {
+                hint: 'tjoin combines tables on a shared column; pass "left" to keep unmatched left rows.',
+                code: [
+                    'let people = table([',
+                    '    {"id": 1, "name": "Ada"},',
+                    '    {"id": 2, "name": "Bob"},',
+                    '    {"id": 3, "name": "Cy"}',
+                    '], ["id", "name"]);',
+                    '',
+                    'let scores = table([',
+                    '    {"id": 1, "score": 90},',
+                    '    {"id": 3, "score": 70}',
+                    '], ["id", "score"]);',
+                    '',
+                    '// inner join: only ids present on both sides',
+                    'let matched = tjoin(people, scores, "id");',
+                    'print matched;',
+                    '',
+                    '// left join: keep every person, null when there is no score',
+                    'print tjoin(people, scores, "id", "left");',
+                ].join('\n')
+            },
             types: {
                 hint: 'Floats, null, interpolation, format, and math/string helpers.',
                 code: [
@@ -557,6 +581,30 @@
                     '    print "message: " + e["message"];',
                     '    print "type: " + e["type"];',
                     '}',
+                ].join('\n')
+            },
+            scripting: {
+                hint: 'Clock and randomness, plus CLI arguments and environment (CLI only).',
+                code: [
+                    '// now() is Unix time in milliseconds.',
+                    'let started = now();',
+                    'print "started at " + str(started);',
+                    '',
+                    '// random()        -> float in [0, 1)',
+                    '// random(n)       -> int in [0, n)',
+                    '// random(a, b)    -> int in [a, b)',
+                    'print "unit: " + str(random());',
+                    'loop i in range(0, 5) {',
+                    '    print "roll: " + str(random(1, 7));',
+                    '}',
+                    '',
+                    '// args() lists command-line arguments:',
+                    '//   veri -run script.veri a b  ->  ["a", "b"]',
+                    '// The web IDE passes none.',
+                    'print "arg count: " + str(len(args()));',
+                    '',
+                    '// env(name) returns a string or null. Like file I/O',
+                    '// it is CLI-only, so it is disabled in this IDE.',
                 ].join('\n')
             },
             kitchen: {
@@ -653,7 +701,8 @@
                 keywords: [
                     'let', 'print', 'if', 'else', 'func', 'return',
                     'loop', 'while', 'times', 'in', 'ask', 'break', 'continue',
-                    'spawn', 'await', 'try', 'catch', 'throw'
+                    'spawn', 'await', 'try', 'catch', 'throw',
+                    'import', 'from'
                 ],
                 typeKeywords: ['true', 'false', 'null'],
                 builtins: [
@@ -669,9 +718,13 @@
                     'uniq', 'sum', 'avg', 'sort', 'sort_by', 'reverse',
                     'any', 'all', 'group_by', 'pluck',
                     'table', 'columns', 'rows', 'tselect', 'twhere',
-                    'tsort', 'tgroup',
+                    'tsort', 'tgroup', 'tjoin',
                     'csv_parse', 'csv_write', 'csv_table',
-                    'json_parse', 'json_write', 'read_file', 'write_file'
+                    'json_parse', 'json_write', 'read_file', 'write_file',
+                    'read_lines', 'append_file',
+                    'args', 'env', 'now', 'random',
+                    'serve', 'db_open', 'db_get', 'db_set', 'db_delete', 'db_has', 'db_keys',
+                    'assert', 'exec'
                 ],
                 tokenizer: {
                     root: [

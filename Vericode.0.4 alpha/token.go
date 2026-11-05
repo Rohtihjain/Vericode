@@ -73,6 +73,8 @@ const (
 	TRY      = "TRY"
 	CATCH    = "CATCH"
 	THROW    = "THROW"
+	IMPORT   = "IMPORT"
+	FROM     = "FROM"
 )
 
 var keywords = map[string]TokenType{
@@ -97,6 +99,8 @@ var keywords = map[string]TokenType{
 	"try":      TRY,
 	"catch":    CATCH,
 	"throw":    THROW,
+	"import":   IMPORT,
+	"from":     FROM,
 }
 
 func LookupIdent(ident string) TokenType {

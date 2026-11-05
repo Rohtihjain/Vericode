@@ -78,6 +78,7 @@ func (vm *VM) newWorkerVM(abort chan struct{}) *VM {
 		globals:      snapshotGlobals(vm.globals),
 		out:          vm.out,
 		input:        vm.input,
+		args:         vm.args,
 		cancel:       abort,
 		parentCancel: vm.cancel,
 		killOnce:     &sync.Once{},
@@ -87,6 +88,7 @@ func (vm *VM) newWorkerVM(abort chan struct{}) *VM {
 		allowIO:      vm.allowIO,
 		detector:     vm.detector,
 		vmID:         nextVMID(),
+		imports:      vm.freshImportState(),
 	}
 	child.frames[0] = frame{ip: -1}
 	child.frameCount = 1

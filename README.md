@@ -1,6 +1,6 @@
 # VeriCode
 
-**0.4 alpha** — a small, evolving programming language written in Go.
+**0.5 alpha** — a small, evolving programming language written in Go.
 
 VeriCode starts as a clear, approachable language for learning and scripting. The long-term aim is to make **concurrency, parallelism, and data-oriented work** first-class and practical — so programs can grow from simple scripts into concurrent and data-heavy workloads without drowning in boilerplate.
 
@@ -25,15 +25,17 @@ Many languages support concurrency and large-scale data processing, but they oft
 
 **0.3** added the parallel layer: `pmap`, `pfilter`, and `pfor` run callbacks on a pool of isolated worker VMs, with order-preserving results.
 
-**0.4** adds the data layer: pipe-friendly batch transforms, table-like structures, CSV/JSON, and file I/O for the CLI.
+**0.4** added the data layer: pipe-friendly batch transforms, table-like structures, CSV/JSON, and file I/O for the CLI.
+
+**0.5** starts the scripting layer: `try` / `catch` / `throw` with structured error values. Script plumbing (imports, command-line arguments, environment, time, randomness) is in progress.
 
 **Later phases** build on that: richer data tooling and polish, only as the core stays solid.
 
 ---
 
-## Current status (0.4 alpha)
+## Current status (0.5 alpha)
 
-Usable for demos, learning, sequential scripts, cooperative concurrency, parallel collection work, and small data pipelines over CSV/JSON. **Not** production-hardened, and not a big-data engine: everything fits in memory.
+Usable for demos, learning, sequential scripts, cooperative concurrency, parallel collection work, small data pipelines over CSV/JSON, and programs that need to recover from failures. **Not** production-hardened, and not a big-data engine: everything fits in memory.
 
 ### What works today
 
@@ -41,6 +43,7 @@ Usable for demos, learning, sequential scripts, cooperative concurrency, paralle
 |-|-|
 |**Types**|integers, floats (including scientific `1e3`), booleans, strings, chars, arrays, hashes, tables, `null`, functions|
 |**Control**|`if` / `else`, `loop while`, `loop n times`, `loop x in arr`, `break` / `continue`|
+|**Errors**|`try` / `catch` / `throw`, structured error values (`message`, `type`, `file`, `line`, `col`, `trace`)|
 |**Functions**|first-class, closures, recursion, named top-level `func name(...) { }`|
 |**Operators**|arithmetic, comparison, logical, compound assign (`+=` and friends), pipe operator, index and slice|
 |**Strings**|escapes, `${expr}` interpolation, `format("{}", ...)`|
@@ -61,7 +64,8 @@ Usable for demos, learning, sequential scripts, cooperative concurrency, paralle
 |**0.1**|Core language|Types, functions, slices, stdlib, CLI and web IDE|
 |**0.2**|Concurrency|Lightweight tasks, message passing / channels, clear spawn and join model|
 |**0.3**|Parallelism|Parallel collection ops, worker pools, CPU-bound parallel loops|
-|**0.4** (now)|Data-oriented|Pipelines, batch transforms, practical I/O (CSV/JSON), table-like structures|
+|**0.4**|Data-oriented|Pipelines, batch transforms, practical I/O (CSV/JSON), table-like structures|
+|**0.5** (now)|Scripting|Error handling with `try` / `catch` / `throw`; imports, arguments, environment, time, randomness|
 |**Later**|Scale and polish|Richer runtime, optional native hooks, tooling — only as the core stays solid|
 
 This roadmap is intentional: **concurrency before big data**. A trustworthy concurrent runtime is the base for parallel and data features.
@@ -183,7 +187,7 @@ VeriCode's concurrency is **share-nothing with explicit sharing**:
 * **Snapshot isolation** — the task receives a *copy* of the parent's variables: arrays, hashes, tables, and closures are deep-copied at spawn. A task cannot mutate the parent's state, so **there are no data races by construction**.
 * **Channels are the one shared thing.** `chan(n)` creates a buffered channel, `chan()` an unbuffered (rendezvous) one. `send(ch, v)` / `recv(ch)` move values between tasks; values pass through the channel itself.
 * **`await t`** joins a task: it waits for completion, returns the task's result, and re-raises the task's error at the `await` site.
-* **Errors surface even if you forget to join** — an unawaited task's failure ends the run with that error.
+* **Errors surface even if you forget to join** — an unawaited task's failure ends the run with that error. An error re-raised at an `await` site counts as handled once `try` / `catch` catches it.
 * **Cancellation is tree-shaped.** If the main program fails, it cancels every task it spawned (and they cancel theirs). Blocked `send` / `recv` / `await` / `sleep` wake immediately with a cancellation error instead of leaking goroutines.
 * **`sleep(ms)`** pauses only the current task.
 * **Deadlocks are detected.** When every task is blocked in an untimed wait — `send`, `recv`, `await`, or a pool join — and no `sleep` timer is pending, the run stops with a source-located `deadlock` error that lists who is waiting on what. No more Go `fatal error` in the CLI or a hung request in the web IDE.
@@ -343,6 +347,41 @@ write_file("totals.csv", csv_write(scores));
 
 ---
 
+## Error handling (0.5)
+
+```veri
+try {
+  let parsed = json_parse(input);
+  print parsed["name"];
+} catch err {
+  print "failed: " + err["message"];
+  print "at " + err["file"] + ":" + str(err["line"]);
+}
+```
+
+* **`try { ... } catch name { ... }`** runs the body; if a statement raises, the rest of the body is skipped and execution continues in the handler. With no error, the handler never runs.
+* **`throw value;`** raises an error deliberately. A string becomes the message; any other value is rendered with its printed form.
+* **The catch variable is a hash** describing the failure:
+
+  |Key|Meaning|
+  |-|-|
+  |`message`|the error message, such as `"division by zero"`|
+  |`type`|the error kind (`"RuntimeError"`)|
+  |`file`, `line`, `col`|where the error was raised|
+  |`trace`|call stack text; empty when raised in the main program|
+
+* **Anything can fail** — arithmetic (`1 / 0`), index and slice misuse, builtin argument errors, callback failures from `pmap` / `pfilter` / `pfor`, and errors re-raised by `await` all land in the nearest active handler.
+* **Handlers unwind across calls.** A `try` in the caller catches an error raised several frames deep: call frames and stack temporaries are discarded, and execution resumes at the handler.
+* **`return`, `break`, and `continue` leave no stale handlers behind**, whether they exit a try directly or from inside a nested loop.
+* **An error raised inside a handler propagates to the enclosing handler**, so nested tries can add context and rethrow.
+* **Errors are ordinary hash values**, so they can be printed, indexed, encoded with `json_write`, or passed to functions.
+* **Some failures are not catchable.** Cancellation and deadlock detection are fatal by design: catching a cancellation would let cancelled work keep running, and catching a deadlock would leave the runtime stuck. They always end the run.
+* **A caught `await` failure counts as handled** — once `await` re-raises a failed task's error, the runtime no longer reports that task a second time as an unawaited failure.
+
+Uncaught errors keep the existing diagnostics: the source line with a caret, the error type, and the call stack.
+
+---
+
 ## Project layout
 
 ```
@@ -365,6 +404,7 @@ write_file("totals.csv", csv_write(scores));
 ├── token.go         # Token types and keywords
 ├── vm.go            # Bytecode interpreter
 ├── vm_test.go       # Core language and error-reporting tests
+├── try_test.go      # try / catch / throw tests
 ├── parallel_test.go # Parallel-op tests
 ├── data_test.go     # Pipeline and transform tests
 ├── deadlock_test.go # Deadlock detection tests
@@ -406,7 +446,7 @@ Programs run on the server via `POST /api/run`. File builtins are disabled there
 
 ---
 
-## Language sketch (0.4)
+## Language sketch (0.5)
 
 ```veri
 let x = 10;
@@ -465,6 +505,14 @@ print people |> tsort("age", "desc") |> tselect("name");
 
 let csv = csv_write(people);
 print json_write(people);
+
+// errors — recover from anything the runtime raises
+try {
+  print 10 / 0;
+} catch err {
+  print "caught: " + err["message"];
+  print "line " + str(err["line"]);
+}
 ```
 
 ---

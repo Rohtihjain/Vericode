@@ -606,9 +606,9 @@ func init() {
 				case ch.Ch <- args[1]:
 					return &Null{}
 				case <-vm.cancel:
-					return newError("task cancelled")
+					return newFatalError("task cancelled")
 				case <-vm.parentCancel:
-					return newError("task cancelled")
+					return newFatalError("task cancelled")
 				case <-vm.deadlockChan():
 					return vm.deadlockErr()
 				}
@@ -630,9 +630,9 @@ func init() {
 				case v := <-ch.Ch:
 					return v
 				case <-vm.cancel:
-					return newError("task cancelled")
+					return newFatalError("task cancelled")
 				case <-vm.parentCancel:
-					return newError("task cancelled")
+					return newFatalError("task cancelled")
 				case <-vm.deadlockChan():
 					return vm.deadlockErr()
 				}
@@ -652,11 +652,16 @@ func init() {
 				defer endWait()
 				select {
 				case <-task.Done:
+					task.markAwaited()
 					if task.Err != nil {
 						// Re-raise the child's failure at the await site,
 						// embedding the child's own diagnostic (its real
 						// error location and stack) below ours.
-						return newError("task failed: %s\n--- inside task '%s' (spawned at %s) ---\n%s",
+						raise := newError
+						if re, ok := task.Err.(*runtimeErr); ok && re.fatal {
+							raise = newFatalError
+						}
+						return raise("task failed: %s\n--- inside task '%s' (spawned at %s) ---\n%s",
 							DiagnosticHeadline(task.Err.Error()), task.Name,
 							FormatLoc(task.SpawnLoc), task.Err.Error())
 					}
@@ -665,9 +670,9 @@ func init() {
 					}
 					return task.Result
 				case <-vm.cancel:
-					return newError("task cancelled")
+					return newFatalError("task cancelled")
 				case <-vm.parentCancel:
-					return newError("task cancelled")
+					return newFatalError("task cancelled")
 				case <-vm.deadlockChan():
 					return vm.deadlockErr()
 				}
@@ -693,10 +698,10 @@ func init() {
 					return &Null{}
 				case <-vm.cancel:
 					timer.Stop()
-					return newError("task cancelled")
+					return newFatalError("task cancelled")
 				case <-vm.parentCancel:
 					timer.Stop()
-					return newError("task cancelled")
+					return newFatalError("task cancelled")
 				case <-vm.deadlockChan():
 					timer.Stop()
 					return vm.deadlockErr()
@@ -830,6 +835,12 @@ func newError(format string, args ...interface{}) Object {
 	return &Error{Message: fmt.Sprintf(format, args...)}
 }
 
+// newFatalError creates an error that try/catch cannot intercept: cancellation
+// and deadlock must always end the run.
+func newFatalError(format string, args ...interface{}) Object {
+	return &Error{Message: fmt.Sprintf(format, args...), Fatal: true}
+}
+
 // callUserFn invokes a Builtin, Closure, or CompiledFunction with the given args.
 func callUserFn(vm *VM, fnObj Object, args ...Object) Object {
 	switch fn := fnObj.(type) {
@@ -838,6 +849,9 @@ func callUserFn(vm *VM, fnObj Object, args ...Object) Object {
 	case *Closure, *CompiledFunction:
 		result, err := vm.CallFn(fnObj, args...)
 		if err != nil {
+			if re, ok := err.(*runtimeErr); ok && re.fatal {
+				return newFatalError("%s", err.Error())
+			}
 			return newError("%s", err.Error())
 		}
 		return result

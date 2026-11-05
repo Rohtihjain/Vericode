@@ -277,7 +277,10 @@ func (vm *VM) parallelRunInline(n int, get func(int) Object, fnObj Object, filte
 // worker's full diagnostic below.
 func wrapPoolError(op string, err error) Object {
 	if err == errCancelled {
-		return newError("%s", err.Error())
+		return newFatalError("%s", err.Error())
+	}
+	if re, ok := err.(*runtimeErr); ok && re.fatal {
+		return newFatalError("%s", err.Error())
 	}
 	return newError("%s failed: %s\n--- inside parallel worker ---\n%s",
 		op, DiagnosticHeadline(err.Error()), err.Error())

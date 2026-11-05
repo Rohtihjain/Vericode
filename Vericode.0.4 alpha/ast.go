@@ -219,6 +219,32 @@ func (es *ExpressionStatement) statementNode()       {}
 func (es *ExpressionStatement) TokenLiteral() string { return es.Token.Literal }
 func (es *ExpressionStatement) String() string       { return es.Expression.String() }
 
+// try { <body> } catch <name> { <handler> }
+type TryStatement struct {
+	Token   Token // the TRY token
+	Body    *BlockStatement
+	Name    *Identifier
+	Handler *BlockStatement
+}
+
+func (ts *TryStatement) statementNode()       {}
+func (ts *TryStatement) TokenLiteral() string { return ts.Token.Literal }
+func (ts *TryStatement) String() string {
+	return "try " + ts.Body.String() + " catch " + ts.Name.String() + " " + ts.Handler.String()
+}
+
+// throw <expr>;
+type ThrowStatement struct {
+	Token Token // the THROW token
+	Value Expression
+}
+
+func (ts *ThrowStatement) statementNode()       {}
+func (ts *ThrowStatement) TokenLiteral() string { return ts.Token.Literal }
+func (ts *ThrowStatement) String() string {
+	return "throw " + ts.Value.String() + ";"
+}
+
 // ─── Expressions ──────────────────────────────────────────────────────────────
 
 type Identifier struct {

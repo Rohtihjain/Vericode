@@ -45,6 +45,10 @@ const (
 	OpSetIndex
 	OpSlice
 	OpSpawn
+	OpTryBegin
+	OpTryEnd
+	OpTryPop
+	OpThrow
 )
 
 type Definition struct {
@@ -93,6 +97,10 @@ var definitions = map[Opcode]*Definition{
 	OpSetIndex:           {"OpSetIndex", nil},
 	OpSlice:              {"OpSlice", nil},
 	OpSpawn:              {"OpSpawn", []int{2}}, // num args
+	OpTryBegin:           {"OpTryBegin", []int{2}}, // catch target
+	OpTryEnd:             {"OpTryEnd", nil},
+	OpTryPop:             {"OpTryPop", nil},
+	OpThrow:              {"OpThrow", nil},
 }
 
 func Make(op Opcode, operands ...int) []byte {

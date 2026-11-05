@@ -12,6 +12,7 @@ type loopContext struct {
 	continuePos   int
 	continueJumps []int
 	breakJumps    []int
+	tryDepth      int // open try handlers when the loop started
 }
 
 type Compiler struct {
@@ -21,6 +22,7 @@ type Compiler struct {
 	localTable   map[string]int // local name -> index (non-nil inside fn)
 	isLocal      bool
 	loopStack    []*loopContext
+	tryDepth     int // number of try handlers open in this function
 
 	parent       *Compiler // enclosing function compiler (for free vars)
 	freeSymbols  []string  // ordered free variable names
@@ -228,8 +230,9 @@ func (c *Compiler) Compile(node Node) error {
 		if len(c.loopStack) == 0 {
 			return c.errorf(node.Token.Line, node.Token.Col, "'break' outside of loop")
 		}
-		jumpPos := c.emit(OpJump, 9999)
 		ctx := c.loopStack[len(c.loopStack)-1]
+		c.emitTryPops(c.tryDepth - ctx.tryDepth)
+		jumpPos := c.emit(OpJump, 9999)
 		ctx.breakJumps = append(ctx.breakJumps, jumpPos)
 
 	case *ContinueStatement:
@@ -237,6 +240,7 @@ func (c *Compiler) Compile(node Node) error {
 			return c.errorf(node.Token.Line, node.Token.Col, "'continue' outside of loop")
 		}
 		ctx := c.loopStack[len(c.loopStack)-1]
+		c.emitTryPops(c.tryDepth - ctx.tryDepth)
 		if ctx.isCountLoop {
 			jumpPos := c.emit(OpJump, 9999)
 			ctx.continueJumps = append(ctx.continueJumps, jumpPos)
@@ -267,7 +271,19 @@ func (c *Compiler) Compile(node Node) error {
 		if err := c.Compile(node.ReturnValue); err != nil {
 			return err
 		}
+		c.emitTryPops(c.tryDepth)
 		c.emit(OpReturnValue)
+
+	case *TryStatement:
+		return c.compileTry(node)
+
+	case *ThrowStatement:
+		if err := c.Compile(node.Value); err != nil {
+			return err
+		}
+		// Point the raise at 'throw', not at the thrown expression.
+		c.setNodeLoc(node)
+		c.emit(OpThrow)
 
 	case *IfStatement:
 		return c.compileIf(node.Condition, node.Consequence, node.Alternative)
@@ -646,6 +662,58 @@ func (c *Compiler) compileExpressionBlock(block *BlockStatement) error {
 }
 
 
+// compileTry emits a handler registration around the body, stores the caught
+// error into the catch variable, and jumps over the handler on normal exit.
+func (c *Compiler) compileTry(node *TryStatement) error {
+	c.tryDepth++
+	catchPos := c.emit(OpTryBegin, 9999)
+
+	if err := c.Compile(node.Body); err != nil {
+		return err
+	}
+
+	c.emit(OpTryEnd)
+	c.tryDepth--
+	jumpEndPos := c.emit(OpJump, 9999)
+
+	c.changeOperand(catchPos, len(c.instructions))
+	// The VM leaves the error value on the stack when it lands here.
+	kind, idx := c.declareName(node.Name.Value)
+	c.emitStoreName(kind, idx)
+
+	if err := c.Compile(node.Handler); err != nil {
+		return err
+	}
+	c.changeOperand(jumpEndPos, len(c.instructions))
+	return nil
+}
+
+// emitTryPops unregisters handlers that a jump is leaving behind.
+func (c *Compiler) emitTryPops(n int) {
+	for i := 0; i < n; i++ {
+		c.emit(OpTryPop)
+	}
+}
+
+// declareName allocates (or reuses) a binding in the current function or the
+// global table, like `let` does.
+func (c *Compiler) declareName(name string) (kind string, index int) {
+	if c.isLocal {
+		if idx, ok := c.localTable[name]; ok {
+			return "local", idx
+		}
+		idx := len(c.localTable)
+		c.localTable[name] = idx
+		return "local", idx
+	}
+	if idx, ok := c.symbolTable[name]; ok {
+		return "global", idx
+	}
+	idx := len(c.symbolTable)
+	c.symbolTable[name] = idx
+	return "global", idx
+}
+
 // â”€â”€â”€ loop while â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (c *Compiler) compileWhileLoop(node *LoopStatement) error {
@@ -656,7 +724,7 @@ func (c *Compiler) compileWhileLoop(node *LoopStatement) error {
 	}
 	jumpFalsePos := c.emit(OpJumpWithFalse, 9999)
 
-	ctx := &loopContext{isCountLoop: false, continuePos: startPos, breakJumps: []int{}}
+	ctx := &loopContext{isCountLoop: false, continuePos: startPos, breakJumps: []int{}, tryDepth: c.tryDepth}
 	c.loopStack = append(c.loopStack, ctx)
 
 	if err := c.Compile(node.Body); err != nil {
@@ -707,7 +775,7 @@ func (c *Compiler) compileCountLoop(node *LoopStatement) error {
 
 	jumpFalsePos := c.emit(OpJumpWithFalse, 9999)
 
-	ctx := &loopContext{isCountLoop: true, continueJumps: []int{}, breakJumps: []int{}}
+	ctx := &loopContext{isCountLoop: true, continueJumps: []int{}, breakJumps: []int{}, tryDepth: c.tryDepth}
 	c.loopStack = append(c.loopStack, ctx)
 
 	if err := c.Compile(node.Body); err != nil {
@@ -803,7 +871,7 @@ func (c *Compiler) compileForInLoop(node *LoopStatement) error {
 	c.emitStoreName(iterKind, iterIdx)
 
 	// Use continueJumps like counted loops (continue jumps to increment)
-	ctx := &loopContext{isCountLoop: true, continueJumps: []int{}, breakJumps: []int{}}
+	ctx := &loopContext{isCountLoop: true, continueJumps: []int{}, breakJumps: []int{}, tryDepth: c.tryDepth}
 	c.loopStack = append(c.loopStack, ctx)
 
 	if err := c.Compile(node.Body); err != nil {

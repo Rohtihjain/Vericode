@@ -70,6 +70,9 @@ const (
 	CONTINUE = "CONTINUE"
 	SPAWN    = "SPAWN"
 	AWAIT    = "AWAIT"
+	TRY      = "TRY"
+	CATCH    = "CATCH"
+	THROW    = "THROW"
 )
 
 var keywords = map[string]TokenType{
@@ -91,6 +94,9 @@ var keywords = map[string]TokenType{
 	"continue": CONTINUE,
 	"spawn":    SPAWN,
 	"await":    AWAIT,
+	"try":      TRY,
+	"catch":    CATCH,
+	"throw":    THROW,
 }
 
 func LookupIdent(ident string) TokenType {

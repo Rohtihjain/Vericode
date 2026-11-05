@@ -17,6 +17,16 @@ type frame struct {
 	basePointer  int
 	instructions []byte
 	cl           *Closure // non-nil when executing a closure
+	handlersBase int      // try handlers active when this frame was entered
+}
+
+// catchHandler is a try/catch handler registered by OpTryBegin. target is an
+// instruction offset in the frame that registered it; sp is restored before
+// the catch body runs so expression temporaries are discarded.
+type catchHandler struct {
+	frameDepth int
+	target     int
+	sp         int
 }
 
 // ─── VM ───────────────────────────────────────────────────────────────────────
@@ -41,6 +51,7 @@ type VM struct {
 	allowIO      bool       // read_file/write_file; enabled for the CLI only
 	detector     *deadlockDetector
 	vmID         int64
+	handlers     []catchHandler // active try handlers, innermost last
 }
 
 func NewVM(bytecode *Bytecode) *VM {
@@ -64,9 +75,28 @@ func NewVM(bytecode *Bytecode) *VM {
 	return vm
 }
 
+// runtimeErr is a VeriCode runtime failure. The formatted diagnostic is what
+// an uncaught error prints; the structured fields feed the value a catch block
+// receives.
+type runtimeErr struct {
+	formatted string
+	msg       string
+	kind      string
+	loc       SourceLocation
+	trace     string
+	fatal     bool // cancellation/deadlock: bypasses try/catch
+}
+
+func (e *runtimeErr) Error() string { return e.formatted }
+
 // runtimeError formats a runtime error with source context when available,
 // followed by the call stack when the error happened inside function calls.
 func (vm *VM) runtimeError(format string, args ...interface{}) error {
+	return vm.newRuntimeError(false, "RuntimeError", format, args...)
+}
+
+// newRuntimeError builds the structured error; fatal failures bypass try/catch.
+func (vm *VM) newRuntimeError(fatal bool, kind, format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
 	f := vm.currentFrame()
 	ip := f.ip
@@ -86,13 +116,15 @@ func (vm *VM) runtimeError(format string, args ...interface{}) error {
 		filename = vm.filename
 	}
 	if loc.Line > 0 {
-		out := FormatDiagnostic(filename, vm.source, "RuntimeError", msg, loc.Line, loc.Col)
-		if trace := vm.captureStackTrace(); trace != "" {
+		loc.Filename = filename
+		out := FormatDiagnostic(filename, vm.source, kind, msg, loc.Line, loc.Col)
+		trace := vm.captureStackTrace()
+		if trace != "" {
 			out += "\n" + trace
 		}
-		return fmt.Errorf("%s", out)
+		return &runtimeErr{formatted: out, msg: msg, kind: kind, loc: loc, trace: trace, fatal: fatal}
 	}
-	return fmt.Errorf("%s", msg)
+	return &runtimeErr{formatted: msg, msg: msg, kind: kind, loc: loc, trace: "", fatal: fatal}
 }
 
 // captureStackTrace walks the current call frames, innermost first. Each
@@ -142,16 +174,40 @@ func (vm *VM) captureStackTrace() string {
 func (vm *VM) builtinError(e *Error) error {
 	msg := e.Message
 	if IsFormattedDiagnostic(msg) {
-		return fmt.Errorf("%s", msg)
+		// Already a full diagnostic (a callback failure or a re-raised task
+		// error): keep its real location and stack intact.
+		return &runtimeErr{
+			formatted: msg,
+			msg:       DiagnosticHeadline(msg),
+			kind:      "RuntimeError",
+			trace:     diagnosticTail(msg),
+			fatal:     e.Fatal,
+		}
 	}
 	if i := strings.IndexByte(msg, '\n'); i >= 0 {
 		// Multi-line message: a headline plus a nested diagnostic (a failed
 		// task re-raised at await). Show the headline at this call site and
 		// append the nested block below it.
-		base := vm.runtimeError("%s", msg[:i])
-		return fmt.Errorf("%s\n%s", base.Error(), msg[i+1:])
+		base := vm.newRuntimeError(e.Fatal, "RuntimeError", "%s", msg[:i]).(*runtimeErr)
+		trace := strings.TrimSpace(base.trace + "\n" + msg[i+1:])
+		return &runtimeErr{
+			formatted: base.formatted + "\n" + msg[i+1:],
+			msg:       base.msg,
+			kind:      base.kind,
+			loc:       base.loc,
+			trace:     trace,
+			fatal:     e.Fatal,
+		}
 	}
-	return vm.runtimeError("%s", msg)
+	return vm.newRuntimeError(e.Fatal, "RuntimeError", "%s", msg)
+}
+
+// diagnosticTail returns everything after a diagnostic's first line.
+func diagnosticTail(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[i+1:])
+	}
+	return ""
 }
 
 func (vm *VM) SetInput(r io.Reader) { vm.input = r }
@@ -161,8 +217,23 @@ func (vm *VM) SetInput(r io.Reader) { vm.input = r }
 func (vm *VM) SetAllowIO(allow bool) { vm.allowIO = allow }
 
 func (vm *VM) currentFrame() *frame  { return &vm.frames[vm.frameCount-1] }
-func (vm *VM) pushFrame(f frame)     { vm.frames[vm.frameCount] = f; vm.frameCount++ }
-func (vm *VM) popFrame() *frame      { vm.frameCount--; return &vm.frames[vm.frameCount] }
+func (vm *VM) pushFrame(f frame) {
+	f.handlersBase = len(vm.handlers)
+	vm.frames[vm.frameCount] = f
+	vm.frameCount++
+}
+func (vm *VM) popFrame() *frame { vm.frameCount--; return &vm.frames[vm.frameCount] }
+
+// trimHandlers discards handlers registered above a saved base after a frame
+// exits (normally or by unwinding).
+func (vm *VM) trimHandlers(base int) {
+	if base < 0 {
+		base = 0
+	}
+	if base < len(vm.handlers) {
+		vm.handlers = vm.handlers[:base]
+	}
+}
 
 func (vm *VM) push(o Object) error {
 	if vm.sp >= len(vm.stack) {
@@ -221,7 +292,7 @@ func (vm *VM) waitTasks() error {
 		case <-vm.cancel:
 		case <-vm.parentCancel:
 		}
-		if childErr == nil && t.Err != nil {
+		if childErr == nil && t.Err != nil && !t.wasAwaited() {
 			childErr = fmt.Errorf("unawaited task '%s' (spawned at %s) failed\n\n%s",
 				t.Name, FormatLoc(t.SpawnLoc), t.Err.Error())
 		}
@@ -242,10 +313,53 @@ func (vm *VM) Run() error {
 
 // ─── Main execution loop ──────────────────────────────────────────────────────
 
-// runUntilDepth runs until frameCount drops to targetDepth.
+// runUntilDepth runs until frameCount drops to targetDepth, resuming at a
+// try/catch handler when the running code raises a catchable error.
 // CallFn uses this to execute a nested compiled function inline.
 // Run() is simply runUntilDepth(0).
 func (vm *VM) runUntilDepth(targetDepth int) error {
+	for {
+		err := vm.execute(targetDepth)
+		if err == nil {
+			return nil
+		}
+		re, ok := err.(*runtimeErr)
+		if !ok || re.fatal {
+			return err
+		}
+		if len(vm.handlers) == 0 {
+			return err
+		}
+		h := vm.handlers[len(vm.handlers)-1]
+		if h.frameDepth <= targetDepth {
+			// The handler lives in a caller's frame, which this run does not
+			// own — propagate so the caller's run loop can catch it.
+			return err
+		}
+		vm.handlers = vm.handlers[:len(vm.handlers)-1]
+		vm.frameCount = h.frameDepth
+		vm.sp = h.sp
+		if err := vm.push(vm.errorValue(re)); err != nil {
+			return err
+		}
+		// The execute loop pre-increments ip, so land on target - 1.
+		vm.currentFrame().ip = h.target - 1
+	}
+}
+
+// errorValue converts a runtime failure into the hash a catch block receives.
+func (vm *VM) errorValue(err error) Object {
+	re, ok := err.(*runtimeErr)
+	if !ok {
+		msg := err.Error()
+		return newErrorHash(DiagnosticHeadline(msg), "RuntimeError", SourceLocation{}, diagnosticTail(msg))
+	}
+	return newErrorHash(re.msg, re.kind, re.loc, re.trace)
+}
+
+// execute is the raw interpreter loop; runUntilDepth wraps it with try/catch
+// unwinding.
+func (vm *VM) execute(targetDepth int) error {
 	for vm.frameCount > targetDepth {
 		f := vm.currentFrame()
 		f.ip++
@@ -255,9 +369,11 @@ func (vm *VM) runUntilDepth(targetDepth int) error {
 			if vm.frameCount == 1 {
 				// Main program finished.
 				vm.frameCount--
+				vm.trimHandlers(0)
 				break
 			}
 			pf := vm.popFrame()
+			vm.trimHandlers(pf.handlersBase)
 			vm.sp = pf.basePointer - 1
 			if err := vm.push(&Null{}); err != nil {
 				return err
@@ -564,6 +680,7 @@ func (vm *VM) runUntilDepth(targetDepth int) error {
 		case OpReturnValue:
 			val := vm.pop()
 			pf := vm.popFrame()
+			vm.trimHandlers(pf.handlersBase)
 			vm.sp = pf.basePointer - 1
 			if err := vm.push(val); err != nil {
 				return err
@@ -571,6 +688,7 @@ func (vm *VM) runUntilDepth(targetDepth int) error {
 
 		case OpReturn:
 			pf := vm.popFrame()
+			vm.trimHandlers(pf.handlersBase)
 			vm.sp = pf.basePointer - 1
 			if err := vm.push(&Null{}); err != nil {
 				return err
@@ -589,6 +707,36 @@ func (vm *VM) runUntilDepth(targetDepth int) error {
 			}
 			if err := vm.push(task); err != nil {
 				return err
+			}
+
+		case OpTryBegin:
+			target := int(binary.BigEndian.Uint16(ins[f.ip+1:]))
+			f.ip += 2
+			vm.handlers = append(vm.handlers, catchHandler{
+				frameDepth: vm.frameCount,
+				target:     target,
+				sp:         vm.sp,
+			})
+
+		case OpTryEnd:
+			if len(vm.handlers) > 0 {
+				vm.handlers = vm.handlers[:len(vm.handlers)-1]
+			}
+
+		case OpTryPop:
+			if len(vm.handlers) > 0 {
+				vm.handlers = vm.handlers[:len(vm.handlers)-1]
+			}
+
+		case OpThrow:
+			val := vm.pop()
+			switch v := val.(type) {
+			case *String:
+				return vm.runtimeError("%s", v.Value)
+			case nil:
+				return vm.runtimeError("null")
+			default:
+				return vm.runtimeError("%s", v.Inspect())
 			}
 		}
 	}
@@ -969,6 +1117,7 @@ func (vm *VM) CallFn(fnObj Object, args ...Object) (Object, error) {
 			}
 		}
 		startDepth := vm.frameCount
+		handlerBase := len(vm.handlers)
 		bp := vm.sp - len(args)
 		vm.pushFrame(frame{
 			ip:           -1,
@@ -982,6 +1131,7 @@ func (vm *VM) CallFn(fnObj Object, args ...Object) (Object, error) {
 			// The failed call may have left frames pushed; pop them so the
 			// VM (and any error reporting afterwards) is back to this depth.
 			vm.frameCount = startDepth
+			vm.trimHandlers(handlerBase)
 			return nil, err
 		}
 		// The return value (or implicit null) sits exactly at savedSP. Read

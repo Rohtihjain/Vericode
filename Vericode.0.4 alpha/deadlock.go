@@ -159,9 +159,9 @@ func (vm *VM) deadlockChan() <-chan struct{} {
 
 func (vm *VM) deadlockErr() Object {
 	if vm.detector == nil {
-		return newError("deadlock")
+		return newFatalError("deadlock")
 	}
-	return newError("%s", vm.detector.message())
+	return newFatalError("%s", vm.detector.message())
 }
 
 // beginWait marks this VM as blocked and returns the matching unblock.

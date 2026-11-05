@@ -165,6 +165,10 @@ func (p *Parser) parseStatement() Statement {
 		return p.parseBreakStatement()
 	case CONTINUE:
 		return p.parseContinueStatement()
+	case TRY:
+		return p.parseTryStatement()
+	case THROW:
+		return p.parseThrowStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -240,6 +244,38 @@ func (p *Parser) parseBreakStatement() *BreakStatement {
 
 func (p *Parser) parseContinueStatement() *ContinueStatement {
 	stmt := &ContinueStatement{Token: p.curToken}
+	if p.peekTokenIs(SEMICOLON) {
+		p.nextToken()
+	}
+	return stmt
+}
+
+func (p *Parser) parseTryStatement() *TryStatement {
+	stmt := &TryStatement{Token: p.curToken}
+	if !p.expectPeek(LBRACE) {
+		return nil
+	}
+	stmt.Body = p.parseBlockStatement()
+	if !p.peekTokenIs(CATCH) {
+		p.addError(p.peekToken, "expected 'catch' after try block")
+		return nil
+	}
+	p.nextToken() // catch
+	if !p.expectPeek(IDENT) {
+		return nil
+	}
+	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	if !p.expectPeek(LBRACE) {
+		return nil
+	}
+	stmt.Handler = p.parseBlockStatement()
+	return stmt
+}
+
+func (p *Parser) parseThrowStatement() *ThrowStatement {
+	stmt := &ThrowStatement{Token: p.curToken}
+	p.nextToken()
+	stmt.Value = p.parseExpression(LOWEST)
 	if p.peekTokenIs(SEMICOLON) {
 		p.nextToken()
 	}

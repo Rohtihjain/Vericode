@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 )
 
 type ObjectType string
@@ -136,10 +137,30 @@ func (cf *CompiledFunction) Inspect() string {
 
 type Error struct {
 	Message string
+	// Fatal errors (cancellation, deadlock) cannot be caught by try/catch.
+	Fatal bool
 }
 
 func (e *Error) Type() ObjectType { return ERROR_OBJ }
 func (e *Error) Inspect() string  { return "Error: " + e.Message }
+
+// newErrorHash builds the value a catch variable receives: a hash with the
+// failure's message, type, source location, and call stack (empty when the
+// error happened in the main frame).
+func newErrorHash(msg, kind string, loc SourceLocation, trace string) *Hash {
+	pairs := make(map[string]HashPairObj, 6)
+	add := func(key string, value Object) {
+		k := &String{Value: key}
+		pairs[k.HashKey()] = HashPairObj{Key: k, Value: value}
+	}
+	add("message", &String{Value: msg})
+	add("type", &String{Value: kind})
+	add("file", &String{Value: loc.Filename})
+	add("line", &Integer{Value: int64(loc.Line)})
+	add("col", &Integer{Value: int64(loc.Col)})
+	add("trace", &String{Value: trace})
+	return &Hash{Pairs: pairs}
+}
 
 // ─── Built-in function ────────────────────────────────────────────────────────
 
@@ -185,7 +206,13 @@ type TaskObj struct {
 	Result   Object
 	Err      error
 	SpawnLoc SourceLocation
+	awaited  int32 // set by await(); read by waitTasks
 }
+
+// markAwaited records that the task's failure was re-raised at an await site,
+// so the run does not report it a second time as an unawaited failure.
+func (t *TaskObj) markAwaited() { atomic.StoreInt32(&t.awaited, 1) }
+func (t *TaskObj) wasAwaited() bool { return atomic.LoadInt32(&t.awaited) != 0 }
 
 func (t *TaskObj) Type() ObjectType { return TASK_OBJ }
 func (t *TaskObj) Inspect() string {

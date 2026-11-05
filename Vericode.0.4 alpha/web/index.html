@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VeriCode 0.4 alpha — Studio</title>
+    <title>VeriCode 0.5 alpha — Studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -169,6 +169,7 @@
                 <option value="concurrency">Concurrency</option>
                 <option value="parallel">Parallel</option>
                 <option value="data">Data</option>
+                <option value="errors">Errors</option>
                 <option value="types">Floats &amp; Null</option>
                 <option value="kitchen">Kitchen Sink</option>
             </select>
@@ -527,6 +528,37 @@
                     'print replace("hello", "l", "L");',
                 ].join('\n')
             },
+            errors: {
+                hint: 'try / catch / throw — recover from runtime errors and inspect them.',
+                code: [
+                    '// Any runtime error can be caught.',
+                    'try {',
+                    '    print 10 / 0;',
+                    '} catch err {',
+                    '    print "caught: " + err["message"];',
+                    '    print "at line " + str(err["line"]);',
+                    '}',
+                    '',
+                    '// Handlers unwind across function calls.',
+                    'func safeDiv(a, b) {',
+                    '    try {',
+                    '        return a / b;',
+                    '    } catch e {',
+                    '        return 0;',
+                    '    }',
+                    '}',
+                    'print safeDiv(10, 2);',
+                    'print safeDiv(10, 0);',
+                    '',
+                    '// throw raises an error for a caller to catch.',
+                    'try {',
+                    '    throw "something went wrong";',
+                    '} catch e {',
+                    '    print "message: " + e["message"];',
+                    '    print "type: " + e["type"];',
+                    '}',
+                ].join('\n')
+            },
             kitchen: {
                 hint: 'Almost every feature in one short program.',
                 code: [
@@ -621,7 +653,7 @@
                 keywords: [
                     'let', 'print', 'if', 'else', 'func', 'return',
                     'loop', 'while', 'times', 'in', 'ask', 'break', 'continue',
-                    'spawn', 'await'
+                    'spawn', 'await', 'try', 'catch', 'throw'
                 ],
                 typeKeywords: ['true', 'false', 'null'],
                 builtins: [
